@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.0.0
+// @version      1.0.1
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle

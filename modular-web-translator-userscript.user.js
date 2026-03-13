@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.0.0
+// @version      1.0.1
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.0.0";
+  const SCRIPT_VERSION = "1.0.1";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
@@ -106,6 +106,8 @@
     outsideClickHandler: null,
     moduleRegistry: new Map(),
   };
+  const builtInProviders = new Map();
+  const builtInSiteModules = new Map();
   state.providerCatalog = new Map(
     state.providerManifest.providers.map((provider) => [provider.id, provider])
   );
@@ -811,6 +813,508 @@
       .trim();
   }
 
+  function registerBuiltInFallbacks() {
+    registerBuiltInProviderFallbacks();
+    registerBuiltInSiteModuleFallbacks();
+  }
+
+  function registerBuiltInProviderFallbacks() {
+    builtInProviders.set("google-web", {
+      id: "google-web",
+      label: "Google Web",
+      async translateText(text, settings) {
+        const targetLanguage = mapLanguageCode(settings.targetLanguage, "google-web");
+        const sourceLanguage = settings.sourceLanguage || "auto";
+        const response = await requestJson({
+          method: "POST",
+          url:
+            "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t" +
+            `&sl=${encodeURIComponent(sourceLanguage)}` +
+            `&tl=${encodeURIComponent(targetLanguage)}`,
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            Accept: "application/json, text/plain, */*",
+          },
+          data: buildFormBody({
+            q: text,
+          }),
+        });
+
+        const translated = parseGoogleTranslation(response);
+        if (!translated) {
+          throw new Error("Google returned an empty result.");
+        }
+
+        return {
+          text: translated,
+          detectedSourceLanguage:
+            Array.isArray(response) && typeof response[2] === "string"
+              ? response[2]
+              : sourceLanguage,
+        };
+      },
+    });
+
+    const SOGOU_BOOTSTRAP_TTL_MS = 15 * 60 * 1000;
+    let sogouBootstrap = null;
+    let sogouBootstrapExpiresAt = 0;
+
+    async function ensureSogouBootstrap(forceRefresh) {
+      const now = Date.now();
+      if (!forceRefresh && sogouBootstrap && sogouBootstrapExpiresAt > now) {
+        return sogouBootstrap;
+      }
+
+      const html = await requestText({
+        method: "GET",
+        url: "https://fanyi.sogou.com/text",
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+      });
+
+      const uuidMatch = html.match(/"uuid":"([^"]+)"/);
+      const secretCodeMatch = html.match(/"secretCode":(\d+)/);
+
+      if (!uuidMatch || !secretCodeMatch) {
+        throw new Error("Failed to initialize a Sogou session.");
+      }
+
+      sogouBootstrap = {
+        uuid: uuidMatch[1],
+        secretCode: secretCodeMatch[1],
+      };
+      sogouBootstrapExpiresAt = now + SOGOU_BOOTSTRAP_TTL_MS;
+      return sogouBootstrap;
+    }
+
+    async function translateWithSogou(text, settings, retried) {
+      const bootstrap = await ensureSogouBootstrap(retried);
+      const to = mapLanguageCode(settings.targetLanguage, "sogou-web");
+      const from = settings.sourceLanguage || "auto";
+      const signature = md5(`${from}${to}${text}${bootstrap.secretCode}`);
+
+      const response = await requestJson({
+        method: "POST",
+        url: "https://fanyi.sogou.com/api/transpc/text/result",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          Accept: "application/json, text/plain, */*",
+          Origin: "https://fanyi.sogou.com",
+          Referer: "https://fanyi.sogou.com/text",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        data: buildFormBody({
+          from,
+          to,
+          text,
+          client: "pc",
+          fr: "browser_pc",
+          needQc: 1,
+          s: signature,
+          uuid: bootstrap.uuid,
+        }),
+        timeout: 15000,
+      });
+
+      const translation = response && response.data ? response.data.translate : null;
+      const detected =
+        response && response.data && response.data.detect
+          ? response.data.detect.detect
+          : from;
+
+      if (translation && translation.errorCode === "0" && translation.dit) {
+        return {
+          text: translation.dit,
+          detectedSourceLanguage: detected,
+        };
+      }
+
+      if (!retried && translation && translation.errorCode === "s10") {
+        return translateWithSogou(text, settings, true);
+      }
+
+      throw new Error(
+        translation && translation.errorCode
+          ? `Sogou error ${translation.errorCode}`
+          : "Sogou returned an empty result."
+      );
+    }
+
+    builtInProviders.set("sogou-web", {
+      id: "sogou-web",
+      label: "Sogou Web",
+      async translateText(text, settings) {
+        return translateWithSogou(text, settings, false);
+      },
+    });
+  }
+
+  function registerBuiltInSiteModuleFallbacks() {
+    const POST_SELECTORS = [
+      "shreddit-post",
+      "article[data-testid='post-container']",
+      "[data-testid='post-container']",
+    ];
+
+    const TITLE_SELECTORS = [
+      "a[id^='post-title-']",
+      "[slot='title']",
+      "a[data-testid='post-title']",
+      "h3",
+      "faceplate-screen-reader-content",
+    ];
+
+    const BODY_SELECTORS = [
+      "shreddit-post-text-body",
+      "[slot='text-body']",
+      "[data-post-click-location='text-body']",
+      "div[data-click-id='text']",
+      "div.md",
+      "[data-testid='post-content']",
+    ];
+
+    function isRedditNewPage(url) {
+      return (
+        url.hostname === "www.reddit.com" &&
+        (url.pathname === "/new" ||
+          url.pathname === "/new/" ||
+          url.pathname.startsWith("/new/"))
+      );
+    }
+
+    function getPostNodes(root) {
+      const nodes = [];
+      for (const selector of POST_SELECTORS) {
+        nodes.push(...root.querySelectorAll(selector));
+      }
+      return uniqueNodes(nodes);
+    }
+
+    function getPostId(postNode) {
+      return (
+        postNode.getAttribute("id") ||
+        postNode.getAttribute("post-id") ||
+        postNode.dataset.postId ||
+        ""
+      );
+    }
+
+    function getPostUrl(postNode) {
+      const permalink = postNode.getAttribute("permalink");
+      if (permalink) {
+        try {
+          return new URL(permalink, location.origin).toString();
+        } catch (error) {
+          return permalink;
+        }
+      }
+
+      const link =
+        postNode.querySelector("a[href*='/comments/']") ||
+        postNode.querySelector("a[id^='post-title-']") ||
+        postNode.querySelector("a[data-testid='post-title']") ||
+        postNode.querySelector("a[href]");
+
+      if (!link) {
+        return "";
+      }
+
+      try {
+        return new URL(link.getAttribute("href"), location.origin).toString();
+      } catch (error) {
+        return link.getAttribute("href") || "";
+      }
+    }
+
+    function extractRedditPost(postNode) {
+      const titleFromAttribute = normalizeInlineText(postNode.getAttribute("post-title"));
+      const titleNode =
+        titleFromAttribute
+          ? {
+              text: titleFromAttribute,
+              element:
+                postNode.querySelector("a[id^='post-title-']") ||
+                postNode.querySelector("[slot='title']") ||
+                postNode.querySelector("a[data-testid='post-title']") ||
+                postNode,
+            }
+          : getFirstText(postNode, TITLE_SELECTORS, normalizeInlineText);
+
+      const bodyNode = getFirstText(postNode, BODY_SELECTORS, normalizeMultilineText);
+
+      if (!titleNode && !bodyNode) {
+        return null;
+      }
+
+      return {
+        id: getPostId(postNode),
+        url: getPostUrl(postNode),
+        title: titleNode ? titleNode.text : "",
+        body: bodyNode ? bodyNode.text : "",
+        titleElement: titleNode ? titleNode.element : null,
+        bodyElement: bodyNode ? bodyNode.element : null,
+      };
+    }
+
+    function getInsertAnchor(slot, sourceElement) {
+      if (!sourceElement) {
+        return null;
+      }
+
+      if (slot === "title") {
+        return (
+          sourceElement.closest("a[id^='post-title-']") ||
+          sourceElement.closest("a[data-testid='post-title']") ||
+          sourceElement.closest("a[href*='/comments/']") ||
+          sourceElement
+        );
+      }
+
+      return sourceElement;
+    }
+
+    function getMetaText(slotLabel, runtime) {
+      return `${slotLabel} | ${runtime.getCurrentProviderLabel()} | ${runtime.getCurrentLanguageLabel()}`;
+    }
+
+    function createContext(postNode, extracted) {
+      return {
+        postNode,
+        extracted,
+        sections: {
+          title: null,
+          body: null,
+        },
+        runId: 0,
+        pendingSignature: "",
+        renderSignature: "",
+      };
+    }
+
+    builtInSiteModules.set("reddit-new", {
+      id: "reddit-new",
+      name: "Reddit /new",
+      mount(runtime) {
+        if (!document.body || !isRedditNewPage(window.location)) {
+          return;
+        }
+
+        const contexts = new Set();
+        const contextByNode = new WeakMap();
+        let scanTimer = null;
+        let observer = null;
+        let unsubscribe = null;
+
+        function cleanupDetachedContexts() {
+          for (const context of Array.from(contexts)) {
+            if (!context.postNode.isConnected) {
+              if (context.sections.title) {
+                runtime.ui.removeSection(context.sections.title);
+              }
+              if (context.sections.body) {
+                runtime.ui.removeSection(context.sections.body);
+              }
+              contexts.delete(context);
+            }
+          }
+        }
+
+        function ensureSection(context, slot, sourceElement) {
+          if (!sourceElement) {
+            if (context.sections[slot]) {
+              runtime.ui.removeSection(context.sections[slot]);
+            }
+            context.sections[slot] = null;
+            return null;
+          }
+
+          const anchor = getInsertAnchor(slot, sourceElement);
+          if (!anchor || !anchor.parentElement) {
+            return null;
+          }
+
+          const slotLabel = slot === "title" ? "Title" : "Body";
+          let section = context.sections[slot];
+          if (!section) {
+            section = runtime.ui.createSection(slotLabel);
+            context.sections[slot] = section;
+          }
+
+          runtime.ui.attachSectionAfter(section, anchor);
+          runtime.ui.setSectionMeta(section, getMetaText(slotLabel, runtime));
+          return section;
+        }
+
+        function getContextTranslationSignature(context) {
+          const settings = runtime.getSettings();
+          return JSON.stringify({
+            provider: settings.provider,
+            targetLanguage: settings.targetLanguage,
+            title: context.extracted.title,
+            body: context.extracted.body,
+          });
+        }
+
+        function translateContext(context) {
+          if (!context.postNode.isConnected) {
+            return;
+          }
+
+          const extracted = extractRedditPost(context.postNode);
+          if (!extracted) {
+            return;
+          }
+
+          context.extracted = extracted;
+
+          const titleSection = ensureSection(context, "title", extracted.titleElement);
+          const bodySection = ensureSection(context, "body", extracted.bodyElement);
+          const signature = getContextTranslationSignature(context);
+
+          if (signature === context.renderSignature || signature === context.pendingSignature) {
+            return;
+          }
+
+          const runId = context.runId + 1;
+          context.runId = runId;
+          context.pendingSignature = signature;
+
+          if (extracted.title && titleSection) {
+            runtime.ui.setSectionLoading(titleSection, getMetaText("Title", runtime));
+          }
+          if (extracted.body && bodySection) {
+            runtime.ui.setSectionLoading(bodySection, getMetaText("Body", runtime));
+          }
+
+          const jobs = [];
+
+          if (extracted.title && titleSection) {
+            jobs.push(
+              runtime.translateText(extracted.title).then((result) => {
+                if (context.runId !== runId) {
+                  return;
+                }
+                runtime.ui.setSectionSuccess(
+                  titleSection,
+                  getMetaText("Title", runtime),
+                  result.text
+                );
+              })
+            );
+          }
+
+          if (extracted.body && bodySection) {
+            jobs.push(
+              runtime.translateText(extracted.body).then((result) => {
+                if (context.runId !== runId) {
+                  return;
+                }
+                runtime.ui.setSectionSuccess(
+                  bodySection,
+                  getMetaText("Body", runtime),
+                  result.text
+                );
+              })
+            );
+          }
+
+          Promise.all(jobs)
+            .then(() => {
+              if (context.runId !== runId) {
+                return;
+              }
+              context.pendingSignature = "";
+              context.renderSignature = signature;
+            })
+            .catch((error) => {
+              if (context.runId !== runId) {
+                return;
+              }
+              context.pendingSignature = "";
+              if (extracted.title && titleSection) {
+                runtime.ui.setSectionError(
+                  titleSection,
+                  getMetaText("Title", runtime),
+                  error
+                );
+              }
+              if (extracted.body && bodySection) {
+                runtime.ui.setSectionError(bodySection, getMetaText("Body", runtime), error);
+              }
+            });
+        }
+
+        function refreshAllContexts() {
+          cleanupDetachedContexts();
+          for (const context of contexts) {
+            context.renderSignature = "";
+            context.pendingSignature = "";
+            translateContext(context);
+          }
+        }
+
+        function scanPosts() {
+          cleanupDetachedContexts();
+          const posts = getPostNodes(document);
+          for (const postNode of posts) {
+            const extracted = extractRedditPost(postNode);
+            if (!extracted || (!extracted.title && !extracted.body)) {
+              continue;
+            }
+
+            let context = contextByNode.get(postNode);
+            if (!context) {
+              context = createContext(postNode, extracted);
+              contextByNode.set(postNode, context);
+              contexts.add(context);
+            }
+
+            context.extracted = extracted;
+            translateContext(context);
+          }
+        }
+
+        function scheduleScan() {
+          if (scanTimer) {
+            clearTimeout(scanTimer);
+          }
+          scanTimer = setTimeout(scanPosts, 120);
+        }
+
+        runtime.ui.ensureSettingsUi({
+          title: "Modular Web Translator",
+          moduleName: "Reddit /new",
+          description:
+            "Remote module loading is blocked by the current page CSP, so the built-in fallback module is active.",
+        });
+
+        scanPosts();
+        observer = new MutationObserver(scheduleScan);
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true,
+        });
+
+        unsubscribe = runtime.onSettingsChanged(() => {
+          refreshAllContexts();
+        });
+
+        return () => {
+          if (scanTimer) {
+            clearTimeout(scanTimer);
+          }
+          if (observer) {
+            observer.disconnect();
+          }
+          if (unsubscribe) {
+            unsubscribe();
+          }
+        };
+      },
+    });
+  }
+
   async function ensureProviderCatalogLoaded() {
     const cached = storageGet(PROVIDER_MANIFEST_CACHE_KEY, null);
     const now = Date.now();
@@ -980,7 +1484,21 @@
       state.providerLoadTasks.delete(providerId);
     });
     state.providerLoadTasks.set(providerId, task);
-    return task;
+    try {
+      return await task;
+    } catch (error) {
+      const fallbackProvider = builtInProviders.get(providerId);
+      if (fallbackProvider) {
+        console.warn(
+          `[modular-web-translator] remote provider ${providerId} blocked, falling back to built-in provider`,
+          error
+        );
+        state.providerRegistry.set(providerId, fallbackProvider);
+        return fallbackProvider;
+      }
+
+      throw error;
+    }
   }
 
   function createProviderRuntime(providerId) {
@@ -1325,6 +1843,7 @@
   async function boot() {
     await waitForDocumentBody();
     ensureGlobalRegistry();
+    registerBuiltInFallbacks();
 
     await ensureProviderCatalogLoaded();
     state.settings = normalizeSettings(state.settings);
@@ -1367,6 +1886,16 @@
         await Promise.resolve(moduleDefinition.mount(runtime, entry));
         log("Mounted remote module", entry.id, entry.version);
       } catch (error) {
+        const fallbackModule = builtInSiteModules.get(entry.id);
+        if (fallbackModule) {
+          console.warn(
+            `[modular-web-translator] remote module ${entry.id} blocked, falling back to built-in module`,
+            error
+          );
+          await Promise.resolve(fallbackModule.mount(runtime, entry));
+          continue;
+        }
+
         console.error(`[modular-web-translator] failed to mount module ${entry.id}`, error);
       }
     }
