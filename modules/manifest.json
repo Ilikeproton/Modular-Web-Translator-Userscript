@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "version": "1.0.0",
+  "cacheTtlMinutes": 30,
+  "moduleCacheTtlMinutes": 30,
+  "modules": [
+    {
+      "id": "reddit-new",
+      "name": "Reddit /new",
+      "version": "1.0.0",
+      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/modules/reddit-new.module.js",
+      "minRuntimeVersion": "1.0.0",
+      "matchRules": [
+        {
+          "hostname": "www.reddit.com",
+          "pathnameEquals": "/new"
+        },
+        {
+          "hostname": "www.reddit.com",
+          "pathnameEquals": "/new/"
+        },
+        {
+          "hostname": "www.reddit.com",
+          "pathnameStartsWith": "/new/"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+# Private working notes
+.prompt/
+
+# Build output
+bin/
+dist/
+release/
+coverage/
+
+# Runtime data
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Archives and temp files
+*.tmp
+*.temp
+*.zip
+*.7z
+
+# Environment files
+.env
+.env.*
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Editor and IDE files
+.idea/
+.vscode/
+*.code-workspace
+
+# Binary artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+*.bat
+*.test
