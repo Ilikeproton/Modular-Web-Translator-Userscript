@@ -1,27 +1,64 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "cacheTtlMinutes": 30,
   "moduleCacheTtlMinutes": 30,
   "modules": [
     {
-      "id": "reddit-new",
-      "name": "Reddit /new",
-      "version": "1.0.0",
-      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/modules/reddit-new.module.js",
-      "minRuntimeVersion": "1.0.0",
+      "id": "reddit-feed",
+      "name": "Reddit Feed",
+      "version": "1.1.0",
+      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/modules/reddit-feed.module.js",
+      "minRuntimeVersion": "1.1.0",
       "matchRules": [
         {
+          "protocol": "https",
+          "hostname": "www.reddit.com",
+          "pathnameEquals": "/"
+        },
+        {
+          "protocol": "https",
           "hostname": "www.reddit.com",
           "pathnameEquals": "/new"
         },
         {
-          "hostname": "www.reddit.com",
-          "pathnameEquals": "/new/"
-        },
-        {
+          "protocol": "https",
           "hostname": "www.reddit.com",
           "pathnameStartsWith": "/new/"
+        },
+        {
+          "protocol": "https",
+          "hostname": "www.reddit.com",
+          "pathnameEquals": "/r/popular"
+        },
+        {
+          "protocol": "https",
+          "hostname": "www.reddit.com",
+          "pathnameEquals": "/r/popular/"
+        },
+        {
+          "protocol": "https",
+          "hostname": "www.reddit.com",
+          "pathnameRegex": "^/r/[^/]+/?$"
+        },
+        {
+          "protocol": "https",
+          "hostname": "www.reddit.com",
+          "pathnameRegex": "^/r/[^/]+/(hot|new|top|rising|controversial)/?$"
+        }
+      ]
+    },
+    {
+      "id": "reddit-explore",
+      "name": "Reddit Explore",
+      "version": "1.1.0",
+      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/modules/reddit-explore.module.js",
+      "minRuntimeVersion": "1.1.0",
+      "matchRules": [
+        {
+          "protocol": "https",
+          "hostname": "www.reddit.com",
+          "pathnameStartsWith": "/explore"
         }
       ]
     }

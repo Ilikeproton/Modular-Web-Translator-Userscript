@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.0.1
+// @version      1.1.0
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.0.1";
+  const SCRIPT_VERSION = "1.1.0";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
@@ -815,7 +815,7 @@
 
   function registerBuiltInFallbacks() {
     registerBuiltInProviderFallbacks();
-    registerBuiltInSiteModuleFallbacks();
+    registerExpandedBuiltInSiteModuleFallbacks();
   }
 
   function registerBuiltInProviderFallbacks() {
@@ -1315,6 +1315,465 @@
     });
   }
 
+  function registerExpandedBuiltInSiteModuleFallbacks() {
+    const FEED_POST_SELECTORS = [
+      "shreddit-post",
+      "article[data-testid='post-container']",
+      "[data-testid='post-container']",
+    ];
+    const FEED_TITLE_SELECTORS = [
+      "a[id^='post-title-']",
+      "[slot='title']",
+      "a[data-testid='post-title']",
+      "h3",
+      "faceplate-screen-reader-content",
+    ];
+    const FEED_BODY_SELECTORS = [
+      "shreddit-post-text-body",
+      "[slot='text-body']",
+      "[data-post-click-location='text-body']",
+      "div[data-click-id='text']",
+      "div.md",
+      "[data-testid='post-content']",
+    ];
+    const EXCLUDED_FEED_PREFIXES = [
+      "/explore",
+      "/settings",
+      "/message",
+      "/topics",
+      "/media",
+      "/notifications",
+      "/login",
+      "/register",
+      "/premium",
+      "/submit",
+      "/chat",
+    ];
+    const EXPLORE_CONTAINER_SELECTOR = [
+      "[data-testid='community-card']",
+      "faceplate-card",
+      "article",
+      "section",
+      "li",
+      "div[data-testid]",
+      "div[class*='card']",
+      "div[class*='Card']",
+    ].join(", ");
+    const EXPLORE_TITLE_SELECTORS = [
+      "a[href^='/r/']",
+      "h2",
+      "h3",
+      "[data-testid='card-title']",
+    ];
+    const EXPLORE_BODY_SELECTORS = [
+      "p",
+      "[data-testid='description']",
+      "[slot='description']",
+      "span",
+    ];
+
+    function getMetaText(slotLabel, runtime) {
+      return `${slotLabel} | ${runtime.getCurrentProviderLabel()} | ${runtime.getCurrentLanguageLabel()}`;
+    }
+
+    function createContext(node, extracted) {
+      return {
+        node,
+        extracted,
+        sections: {
+          title: null,
+          body: null,
+        },
+        runId: 0,
+        pendingSignature: "",
+        renderSignature: "",
+      };
+    }
+
+    function createCollectionController(runtime, options) {
+      const contexts = new Set();
+      const contextByNode = new WeakMap();
+      let scanTimer = null;
+      let observer = null;
+      let unsubscribe = null;
+
+      function cleanupDetachedContexts() {
+        for (const context of Array.from(contexts)) {
+          if (!context.node.isConnected) {
+            if (context.sections.title) {
+              runtime.ui.removeSection(context.sections.title);
+            }
+            if (context.sections.body) {
+              runtime.ui.removeSection(context.sections.body);
+            }
+            contexts.delete(context);
+          }
+        }
+      }
+
+      function ensureSection(context, slot, sourceElement) {
+        const anchor = options.getAnchor(slot, sourceElement);
+        if (!anchor || !anchor.parentElement) {
+          if (context.sections[slot]) {
+            runtime.ui.removeSection(context.sections[slot]);
+          }
+          context.sections[slot] = null;
+          return null;
+        }
+
+        const slotLabel = slot === "title" ? "Title" : "Body";
+        let section = context.sections[slot];
+        if (!section) {
+          section = runtime.ui.createSection(slotLabel);
+          context.sections[slot] = section;
+        }
+
+        runtime.ui.attachSectionAfter(section, anchor);
+        runtime.ui.setSectionMeta(section, getMetaText(slotLabel, runtime));
+        return section;
+      }
+
+      function getSignature(context) {
+        const settings = runtime.getSettings();
+        return JSON.stringify({
+          provider: settings.provider,
+          targetLanguage: settings.targetLanguage,
+          title: context.extracted.title,
+          body: context.extracted.body,
+        });
+      }
+
+      function translateContext(context) {
+        if (!context.node.isConnected) {
+          return;
+        }
+
+        const extracted = options.extract(context.node);
+        if (!extracted) {
+          return;
+        }
+
+        context.extracted = extracted;
+        const titleSection = ensureSection(context, "title", extracted.titleElement);
+        const bodySection = ensureSection(context, "body", extracted.bodyElement);
+        const signature = getSignature(context);
+        if (signature === context.renderSignature || signature === context.pendingSignature) {
+          return;
+        }
+
+        const runId = context.runId + 1;
+        context.runId = runId;
+        context.pendingSignature = signature;
+        const jobs = [];
+
+        if (extracted.title && titleSection) {
+          runtime.ui.setSectionLoading(titleSection, getMetaText("Title", runtime));
+          jobs.push(
+            runtime.translateText(extracted.title).then((result) => {
+              if (context.runId !== runId) {
+                return;
+              }
+              runtime.ui.setSectionSuccess(
+                titleSection,
+                getMetaText("Title", runtime),
+                result.text
+              );
+            })
+          );
+        }
+
+        if (extracted.body && bodySection) {
+          runtime.ui.setSectionLoading(bodySection, getMetaText("Body", runtime));
+          jobs.push(
+            runtime.translateText(extracted.body).then((result) => {
+              if (context.runId !== runId) {
+                return;
+              }
+              runtime.ui.setSectionSuccess(
+                bodySection,
+                getMetaText("Body", runtime),
+                result.text
+              );
+            })
+          );
+        }
+
+        Promise.all(jobs)
+          .then(() => {
+            if (context.runId !== runId) {
+              return;
+            }
+            context.pendingSignature = "";
+            context.renderSignature = signature;
+          })
+          .catch((error) => {
+            if (context.runId !== runId) {
+              return;
+            }
+            context.pendingSignature = "";
+            if (titleSection) {
+              runtime.ui.setSectionError(titleSection, getMetaText("Title", runtime), error);
+            }
+            if (bodySection) {
+              runtime.ui.setSectionError(bodySection, getMetaText("Body", runtime), error);
+            }
+          });
+      }
+
+      function refreshAllContexts() {
+        cleanupDetachedContexts();
+        for (const context of contexts) {
+          context.renderSignature = "";
+          context.pendingSignature = "";
+          translateContext(context);
+        }
+      }
+
+      function scanNodes() {
+        cleanupDetachedContexts();
+        const nodes = options.getNodes(document);
+        for (const node of nodes) {
+          const extracted = options.extract(node);
+          if (!extracted || (!extracted.title && !extracted.body)) {
+            continue;
+          }
+
+          let context = contextByNode.get(node);
+          if (!context) {
+            context = createContext(node, extracted);
+            contextByNode.set(node, context);
+            contexts.add(context);
+          }
+
+          context.extracted = extracted;
+          translateContext(context);
+        }
+      }
+
+      function scheduleScan() {
+        if (scanTimer) {
+          clearTimeout(scanTimer);
+        }
+        scanTimer = setTimeout(scanNodes, options.scanDelay);
+      }
+
+      runtime.ui.ensureSettingsUi(options.uiDetails);
+      scanNodes();
+
+      observer = new MutationObserver(scheduleScan);
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+
+      unsubscribe = runtime.onSettingsChanged(() => {
+        refreshAllContexts();
+      });
+
+      return () => {
+        if (scanTimer) {
+          clearTimeout(scanTimer);
+        }
+        if (observer) {
+          observer.disconnect();
+        }
+        if (unsubscribe) {
+          unsubscribe();
+        }
+      };
+    }
+
+    function isRedditFeedPage(url) {
+      if (url.hostname !== "www.reddit.com") {
+        return false;
+      }
+      const pathname = url.pathname || "/";
+      if (
+        EXCLUDED_FEED_PREFIXES.some(
+          (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+        )
+      ) {
+        return false;
+      }
+      return (
+        pathname === "/" ||
+        pathname === "/new" ||
+        pathname === "/new/" ||
+        pathname.startsWith("/new/") ||
+        pathname === "/r/popular" ||
+        pathname === "/r/popular/" ||
+        /^\/r\/[^/]+\/?$/.test(pathname) ||
+        /^\/r\/[^/]+\/(hot|new|top|rising|controversial)\/?$/.test(pathname)
+      );
+    }
+
+    function getFeedPostNodes(root) {
+      const nodes = [];
+      for (const selector of FEED_POST_SELECTORS) {
+        nodes.push(...root.querySelectorAll(selector));
+      }
+      return uniqueNodes(nodes);
+    }
+
+    function extractFeedPost(postNode) {
+      const titleFromAttribute = normalizeInlineText(postNode.getAttribute("post-title"));
+      const titleNode =
+        titleFromAttribute
+          ? {
+              text: titleFromAttribute,
+              element:
+                postNode.querySelector("a[id^='post-title-']") ||
+                postNode.querySelector("[slot='title']") ||
+                postNode.querySelector("a[data-testid='post-title']") ||
+                postNode,
+            }
+          : getFirstText(postNode, FEED_TITLE_SELECTORS, normalizeInlineText);
+      const bodyNode = getFirstText(postNode, FEED_BODY_SELECTORS, normalizeMultilineText);
+      if (!titleNode && !bodyNode) {
+        return null;
+      }
+      return {
+        title: titleNode ? titleNode.text : "",
+        body: bodyNode ? bodyNode.text : "",
+        titleElement: titleNode ? titleNode.element : null,
+        bodyElement: bodyNode ? bodyNode.element : null,
+      };
+    }
+
+    function getFeedAnchor(slot, sourceElement) {
+      if (!sourceElement) {
+        return null;
+      }
+      if (slot === "title") {
+        return (
+          sourceElement.closest("a[id^='post-title-']") ||
+          sourceElement.closest("a[data-testid='post-title']") ||
+          sourceElement.closest("a[href*='/comments/']") ||
+          sourceElement
+        );
+      }
+      return sourceElement;
+    }
+
+    const redditFeedFallback = {
+      id: "reddit-feed",
+      name: "Reddit Feed",
+      mount(runtime) {
+        if (!document.body || !isRedditFeedPage(window.location)) {
+          return;
+        }
+        return createCollectionController(runtime, {
+          scanDelay: 120,
+          getNodes: getFeedPostNodes,
+          extract: extractFeedPost,
+          getAnchor: getFeedAnchor,
+          uiDetails: {
+            title: "Modular Web Translator",
+            moduleName: "Reddit Feed",
+            description:
+              "Built-in Reddit feed fallback is active because remote module execution was blocked by the current page CSP.",
+          },
+        });
+      },
+    };
+
+    function isRedditExplorePage(url) {
+      return url.hostname === "www.reddit.com" && url.pathname.startsWith("/explore");
+    }
+
+    function getExploreCardNodes(root) {
+      const links = Array.from(root.querySelectorAll("a[href^='/r/']"));
+      const cards = links
+        .map(
+          (link) =>
+            link.closest(EXPLORE_CONTAINER_SELECTOR) ||
+            link.closest("article, section, li") ||
+            link.parentElement
+        )
+        .filter(Boolean);
+      return uniqueNodes(cards).filter((node) => {
+        if (!(node instanceof HTMLElement)) {
+          return false;
+        }
+        if (node.closest("header, nav")) {
+          return false;
+        }
+        if (node.querySelector("shreddit-post, [data-testid='post-container']")) {
+          return false;
+        }
+        return Boolean(node.querySelector("a[href^='/r/']"));
+      });
+    }
+
+    function pickFirstMeaningful(root, selectors, normalizer, minLength) {
+      for (const selector of selectors) {
+        const candidates = root.querySelectorAll(selector);
+        for (const element of candidates) {
+          const text = normalizer(element.textContent);
+          if (text && text.length >= minLength) {
+            return {
+              text,
+              element,
+            };
+          }
+        }
+      }
+      return null;
+    }
+
+    function extractExploreCard(cardNode) {
+      const titleNode = pickFirstMeaningful(
+        cardNode,
+        EXPLORE_TITLE_SELECTORS,
+        normalizeInlineText,
+        2
+      );
+      const bodyNode = pickFirstMeaningful(
+        cardNode,
+        EXPLORE_BODY_SELECTORS,
+        normalizeInlineText,
+        20
+      );
+      if (!titleNode && !bodyNode) {
+        return null;
+      }
+      return {
+        title: titleNode ? titleNode.text : "",
+        body: bodyNode ? bodyNode.text : "",
+        titleElement: titleNode ? titleNode.element : null,
+        bodyElement: bodyNode ? bodyNode.element : null,
+      };
+    }
+
+    const redditExploreFallback = {
+      id: "reddit-explore",
+      name: "Reddit Explore",
+      mount(runtime) {
+        if (!document.body || !isRedditExplorePage(window.location)) {
+          return;
+        }
+        return createCollectionController(runtime, {
+          scanDelay: 160,
+          getNodes: getExploreCardNodes,
+          extract: extractExploreCard,
+          getAnchor(slot, sourceElement) {
+            return sourceElement && sourceElement.parentElement ? sourceElement : null;
+          },
+          uiDetails: {
+            title: "Modular Web Translator",
+            moduleName: "Reddit Explore",
+            description:
+              "Built-in Reddit Explore fallback is active because remote module execution was blocked by the current page CSP.",
+          },
+        });
+      },
+    };
+
+    builtInSiteModules.set("reddit-feed", redditFeedFallback);
+    builtInSiteModules.set("reddit-new", redditFeedFallback);
+    builtInSiteModules.set("reddit-explore", redditExploreFallback);
+  }
+
   async function ensureProviderCatalogLoaded() {
     const cached = storageGet(PROVIDER_MANIFEST_CACHE_KEY, null);
     const now = Date.now();
@@ -1681,6 +2140,19 @@
       if (rule.pathnameStartsWith && !urlObject.pathname.startsWith(rule.pathnameStartsWith)) {
         return false;
       }
+      if (rule.pathnameRegex) {
+        try {
+          if (!(new RegExp(rule.pathnameRegex).test(urlObject.pathname))) {
+            return false;
+          }
+        } catch (error) {
+          console.warn(
+            `[modular-web-translator] invalid pathnameRegex in module rule for ${entry.id}`,
+            error
+          );
+          return false;
+        }
+      }
       if (rule.searchContains && !urlObject.search.includes(rule.searchContains)) {
         return false;
       }
@@ -1824,6 +2296,27 @@
     };
   }
 
+  async function mountDirectFallbackModules(runtime) {
+    let mountedAny = false;
+    const fallbackModules = Array.from(new Set(builtInSiteModules.values()));
+
+    for (const fallbackModule of fallbackModules) {
+      try {
+        const result = await Promise.resolve(fallbackModule.mount(runtime));
+        if (typeof result !== "undefined") {
+          mountedAny = true;
+        }
+      } catch (error) {
+        console.error(
+          `[modular-web-translator] failed to mount direct fallback module ${fallbackModule.id}`,
+          error
+        );
+      }
+    }
+
+    return mountedAny;
+  }
+
   function waitForDocumentBody() {
     if (document.body) {
       return Promise.resolve();
@@ -1861,12 +2354,16 @@
       manifest = await loadManifest();
     } catch (error) {
       console.error("[modular-web-translator] failed to load manifest", error);
+      ensureStyles();
+      await mountDirectFallbackModules(createRuntime());
       return;
     }
 
     const matchedModules = manifest.modules.filter((entry) => moduleMatchesUrl(entry, window.location));
     if (matchedModules.length === 0) {
       log("No remote site module matched current page.", location.href);
+      ensureStyles();
+      await mountDirectFallbackModules(createRuntime());
       return;
     }
 
