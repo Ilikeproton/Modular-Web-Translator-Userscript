@@ -1,6 +1,8 @@
 (function () {
   "use strict";
 
+  const TRANSLATION_RETRY_COOLDOWN_MS = 15000;
+
   const POST_SELECTORS = [
     "shreddit-post",
     "article[data-testid='post-container']",
@@ -145,6 +147,8 @@
       runId: 0,
       pendingSignature: "",
       renderSignature: "",
+      failedSignature: "",
+      retryNotBefore: 0,
     };
   }
 
@@ -224,6 +228,9 @@
       if (signature === context.renderSignature || signature === context.pendingSignature) {
         return;
       }
+      if (signature === context.failedSignature && Date.now() < context.retryNotBefore) {
+        return;
+      }
 
       const runId = context.runId + 1;
       context.runId = runId;
@@ -279,6 +286,8 @@
 
           context.pendingSignature = "";
           context.renderSignature = signature;
+          context.failedSignature = "";
+          context.retryNotBefore = 0;
         })
         .catch((error) => {
           if (context.runId !== runId) {
@@ -286,6 +295,8 @@
           }
 
           context.pendingSignature = "";
+          context.failedSignature = signature;
+          context.retryNotBefore = Date.now() + TRANSLATION_RETRY_COOLDOWN_MS;
           if (extracted.title && titleSection) {
             runtime.ui.setSectionError(
               titleSection,
@@ -304,6 +315,8 @@
       for (const context of contexts) {
         context.renderSignature = "";
         context.pendingSignature = "";
+        context.failedSignature = "";
+        context.retryNotBefore = 0;
         translateContext(context);
       }
     }
