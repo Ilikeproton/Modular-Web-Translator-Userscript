@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.1.0
+// @version      1.1.1
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.1.0";
+  const SCRIPT_VERSION = "1.1.1";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
@@ -743,28 +743,64 @@
   function request(options) {
     const method = options.method || "GET";
     const headers = Object.assign({}, options.headers || {});
+    const timeoutMs = Math.max(1, Number(options.timeout) || 15000);
 
     if (typeof GM_xmlhttpRequest === "function") {
       return new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
+        let settled = false;
+        let timer = null;
+        let requestHandle = null;
+
+        function settleWith(settler, value) {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          settler(value);
+        }
+
+        function rejectWith(message) {
+          settleWith(reject, new Error(message));
+        }
+
+        timer = setTimeout(() => {
+          try {
+            if (requestHandle && typeof requestHandle.abort === "function") {
+              requestHandle.abort();
+            }
+          } catch (error) {
+            log("request abort failed", error);
+          }
+
+          rejectWith(`Request timed out for ${options.url}`);
+        }, timeoutMs + 250);
+
+        requestHandle = GM_xmlhttpRequest({
           method,
           url: options.url,
           headers,
           data: options.data,
-          timeout: options.timeout || 15000,
+          timeout: timeoutMs,
           onload(response) {
             if (response.status >= 200 && response.status < 300) {
-              resolve(response);
+              settleWith(resolve, response);
               return;
             }
 
-            reject(new Error(`HTTP ${response.status} for ${options.url}`));
+            rejectWith(`HTTP ${response.status} for ${options.url}`);
           },
           onerror() {
-            reject(new Error(`Request failed for ${options.url}`));
+            rejectWith(`Request failed for ${options.url}`);
           },
           ontimeout() {
-            reject(new Error(`Request timed out for ${options.url}`));
+            rejectWith(`Request timed out for ${options.url}`);
+          },
+          onabort() {
+            rejectWith(`Request aborted for ${options.url}`);
           },
         });
       });
