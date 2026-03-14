@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.1.2
+// @version      1.8.0
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,21 +18,72 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.1.2";
+  const SCRIPT_VERSION = "1.8.0";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
   const REMOTE_MANIFEST_URL = `${REMOTE_BASE_URL}/modules/manifest.json`;
   const REMOTE_PROVIDER_MANIFEST_URL = `${REMOTE_BASE_URL}/providers/manifest.json`;
+  const AUTO_BALANCED_PROVIDER_ID = "auto-balanced";
   const STORAGE_KEY = "mwt-settings";
   const MANIFEST_CACHE_KEY = "mwt-manifest-cache";
-  const PROVIDER_MANIFEST_CACHE_KEY = "mwt-provider-manifest-cache";
+  const PROVIDER_MANIFEST_CACHE_KEY = "mwt-provider-manifest-cache:v2";
   const MODULE_CACHE_KEY_PREFIX = "mwt-module-cache:";
   const PROVIDER_CACHE_KEY_PREFIX = "mwt-provider-cache:";
-  const QUEUE_CONCURRENCY = 2;
+  const QUEUE_CONCURRENCY = 1;
   const DEFAULT_MANIFEST_TTL_MS = 30 * 60 * 1000;
   const DEFAULT_MODULE_TTL_MS = 30 * 60 * 1000;
   const TRANSLATION_RETRY_COOLDOWN_MS = 15000;
+  const PROVIDER_REQUEST_POLICY = {
+    default: {
+      minIntervalMs: 1200,
+      failureBackoffMs: 15000,
+    },
+    "google-web": {
+      minIntervalMs: 1800,
+      failureBackoffMs: 60000,
+    },
+    "google-fr-web": {
+      minIntervalMs: 1800,
+      failureBackoffMs: 60000,
+    },
+    "google-de-web": {
+      minIntervalMs: 1800,
+      failureBackoffMs: 60000,
+    },
+    "bing-web": {
+      minIntervalMs: 2200,
+      failureBackoffMs: 60000,
+    },
+    "lara-web": {
+      minIntervalMs: 1500,
+      failureBackoffMs: 30 * 60 * 1000,
+    },
+    "qq-web": {
+      minIntervalMs: 2200,
+      failureBackoffMs: 30000,
+    },
+    "yandex-web": {
+      minIntervalMs: 2200,
+      failureBackoffMs: 30000,
+    },
+    "youdao-web": {
+      minIntervalMs: 2400,
+      failureBackoffMs: 30000,
+    },
+    "deepl-web": {
+      minIntervalMs: 2600,
+      failureBackoffMs: 30000,
+    },
+    "baidu-web": {
+      minIntervalMs: 2200,
+      failureBackoffMs: 30000,
+    },
+    "sogou-web": {
+      minIntervalMs: 2000,
+      failureBackoffMs: 30000,
+    },
+  };
 
   const CONFIG = {
     debug: false,
@@ -82,7 +133,7 @@
   ];
 
   const DEFAULT_SETTINGS = {
-    provider: "google-web",
+    provider: AUTO_BALANCED_PROVIDER_ID,
     sourceLanguage: "auto",
     targetLanguage: "zh-CN",
   };
@@ -94,6 +145,7 @@
     providerRegistry: new Map(),
     providerLoadTasks: new Map(),
     translationCache: new Map(),
+    providerRequestState: new Map(),
     queue: [],
     activeRequests: 0,
     settingsListeners: new Set(),
@@ -251,7 +303,7 @@
   function getDefaultProviderManifest() {
     return normalizeProviderManifest({
       schemaVersion: 1,
-      version: "1.0.0",
+      version: "1.8.0",
       cacheTtlMinutes: 30,
       moduleCacheTtlMinutes: 30,
       providers: [
@@ -276,11 +328,106 @@
           },
         },
         {
+          id: "google-fr-web",
+          label: "Google FR Web",
+          version: "1.0.0",
+          scriptUrl: `${REMOTE_BASE_URL}/providers/google-fr-web.provider.js`,
+          minRuntimeVersion: "1.5.0",
+          languageMap: {
+            "zh-CN": "zh-CN",
+            en: "en",
+            ja: "ja",
+            ko: "ko",
+            fr: "fr",
+            de: "de",
+            es: "es",
+            ru: "ru",
+            vi: "vi",
+            th: "th",
+          },
+        },
+        {
+          id: "google-de-web",
+          label: "Google DE Web",
+          version: "1.0.0",
+          scriptUrl: `${REMOTE_BASE_URL}/providers/google-de-web.provider.js`,
+          minRuntimeVersion: "1.5.0",
+          languageMap: {
+            "zh-CN": "zh-CN",
+            en: "en",
+            ja: "ja",
+            ko: "ko",
+            fr: "fr",
+            de: "de",
+            es: "es",
+            ru: "ru",
+            vi: "vi",
+            th: "th",
+          },
+        },
+        {
+          id: "bing-web",
+          label: "Bing Web",
+          version: "1.1.0",
+          scriptUrl: `${REMOTE_BASE_URL}/providers/bing-web.provider.js`,
+          minRuntimeVersion: "1.7.0",
+          languageMap: {
+            "zh-CN": "zh-Hans",
+            en: "en",
+            ja: "ja",
+            ko: "ko",
+            fr: "fr",
+            de: "de",
+            es: "es",
+            ru: "ru",
+            vi: "vi",
+            th: "th",
+          },
+        },
+        {
+          id: "lara-web",
+          label: "Lara Web",
+          version: "1.0.0",
+          scriptUrl: `${REMOTE_BASE_URL}/providers/lara-web.provider.js`,
+          minRuntimeVersion: "1.6.0",
+          languageMap: {
+            "zh-CN": "zh-CN",
+            en: "en",
+            ja: "ja",
+            ko: "ko",
+            fr: "fr",
+            de: "de",
+            es: "es",
+            ru: "ru",
+            vi: "vi",
+            th: "th",
+          },
+        },
+        {
+          id: "youdao-web",
+          label: "Youdao Web",
+          version: "1.1.0",
+          scriptUrl: `${REMOTE_BASE_URL}/providers/youdao-web.provider.js`,
+          minRuntimeVersion: "1.7.0",
+          languageMap: {
+            "zh-CN": "zh-CHS",
+            en: "en",
+            ja: "ja",
+            ko: "ko",
+            fr: "fr",
+            de: "de",
+            es: "es",
+            ru: "ru",
+            vi: "vi",
+            th: "th",
+          },
+        },
+        {
           id: "sogou-web",
           label: "Sogou Web",
-          version: "1.0.0",
+          version: "1.1.0",
           scriptUrl: `${REMOTE_BASE_URL}/providers/sogou-web.provider.js`,
-          minRuntimeVersion: "1.0.0",
+          minRuntimeVersion: "1.2.0",
           languageMap: {
             "zh-CN": "zh-CHS",
             en: "en",
@@ -331,12 +478,57 @@
     state.providerCatalog = new Map(manifest.providers.map((provider) => [provider.id, provider]));
   }
 
-  function getProviderCatalogEntry(providerId) {
+  function getConcreteProviderCatalogEntry(providerId) {
     return state.providerCatalog.get(providerId) || null;
   }
 
-  function getProviderCatalogEntries() {
+  function getConcreteProviderCatalogEntries() {
     return Array.from(state.providerCatalog.values());
+  }
+
+  function getAutoBalancedLanguageMap() {
+    const languageMap = {};
+
+    for (const provider of getConcreteProviderCatalogEntries()) {
+      if (!provider || !provider.languageMap) {
+        continue;
+      }
+
+      for (const [languageId, mappedLanguageId] of Object.entries(provider.languageMap)) {
+        if (mappedLanguageId) {
+          languageMap[languageId] = languageId;
+        }
+      }
+    }
+
+    return languageMap;
+  }
+
+  function getAutoBalancedProviderEntry() {
+    return {
+      id: AUTO_BALANCED_PROVIDER_ID,
+      label: "Auto Balance",
+      version: SCRIPT_VERSION,
+      minRuntimeVersion: SCRIPT_VERSION,
+      isVirtual: true,
+      languageMap: getAutoBalancedLanguageMap(),
+    };
+  }
+
+  function isVirtualProviderId(providerId) {
+    return providerId === AUTO_BALANCED_PROVIDER_ID;
+  }
+
+  function getProviderCatalogEntry(providerId) {
+    if (isVirtualProviderId(providerId)) {
+      return getAutoBalancedProviderEntry();
+    }
+
+    return getConcreteProviderCatalogEntry(providerId);
+  }
+
+  function getProviderCatalogEntries() {
+    return [getAutoBalancedProviderEntry()].concat(getConcreteProviderCatalogEntries());
   }
 
   function normalizeSettings(rawSettings) {
@@ -531,9 +723,13 @@
       .join("");
 
     const moduleLabel = state.uiDetails.moduleName ? `Active module: ${state.uiDetails.moduleName}. ` : "";
+    const autoBalanceHint = isVirtualProviderId(state.settings.provider)
+      ? " Requests are distributed across available providers to reduce rate limits."
+      : "";
     const baseHint =
       `${moduleLabel}Provider: ${getProviderLabel(state.settings.provider)}. ` +
-      `Language: ${getLanguageLabel(state.settings.targetLanguage)}.`;
+      `Language: ${getLanguageLabel(state.settings.targetLanguage)}.` +
+      autoBalanceHint;
     hint.textContent = state.uiNotice ? `${baseHint} ${state.uiNotice}` : baseHint;
   }
 
@@ -570,7 +766,9 @@
       return;
     }
 
-    await ensureProviderLoaded(normalized.provider);
+    if (!isVirtualProviderId(normalized.provider)) {
+      await ensureProviderLoaded(normalized.provider);
+    }
     state.settings = normalized;
     state.uiNotice = "";
     writeSettings(normalized);
@@ -741,6 +939,41 @@
     return params.toString();
   }
 
+  function parseResponseCookies(responseHeaders) {
+    const cookieParts = [];
+    for (const line of String(responseHeaders || "").split(/\r?\n/)) {
+      const match = line.match(/^set-cookie:\s*([^;]+)/i);
+      if (match && match[1]) {
+        cookieParts.push(match[1].trim());
+      }
+    }
+    return cookieParts.join("; ");
+  }
+
+  function mergeCookieHeaders(...cookieHeaders) {
+    const cookieMap = new Map();
+
+    for (const header of cookieHeaders) {
+      for (const cookiePart of String(header || "").split(/;\s*/)) {
+        if (!cookiePart || !cookiePart.includes("=")) {
+          continue;
+        }
+
+        const separatorIndex = cookiePart.indexOf("=");
+        const name = cookiePart.slice(0, separatorIndex).trim();
+        const value = cookiePart.slice(separatorIndex + 1).trim();
+
+        if (!name) {
+          continue;
+        }
+
+        cookieMap.set(name, `${name}=${value}`);
+      }
+    }
+
+    return Array.from(cookieMap.values()).join("; ");
+  }
+
   function request(options) {
     const method = options.method || "GET";
     const headers = Object.assign({}, options.headers || {});
@@ -784,6 +1017,7 @@
           method,
           url: options.url,
           headers,
+          cookie: options.cookie,
           data: options.data,
           timeout: timeoutMs,
           onload(response) {
@@ -856,38 +1090,968 @@
   }
 
   function registerBuiltInProviderFallbacks() {
-    builtInProviders.set("google-web", {
-      id: "google-web",
-      label: "Google Web",
+    function registerGoogleMirrorProvider(providerId, label, endpointBase, refererUrl) {
+      builtInProviders.set(providerId, {
+        id: providerId,
+        label,
+        async translateText(text, settings) {
+          const targetLanguage = mapLanguageCode(settings.targetLanguage, providerId);
+          const sourceLanguage = settings.sourceLanguage || "auto";
+          const response = await requestJson({
+            method: "POST",
+            url:
+              `${endpointBase}/translate_a/single?client=gtx&dt=t` +
+              `&sl=${encodeURIComponent(sourceLanguage)}` +
+              `&tl=${encodeURIComponent(targetLanguage)}`,
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+              Accept: "application/json, text/plain, */*",
+              Origin: endpointBase,
+              Referer: refererUrl,
+            },
+            data: buildFormBody({
+              q: text,
+            }),
+            timeout: 15000,
+          });
+
+          const translated = parseGoogleTranslation(response);
+          if (!translated) {
+            throw new Error(`${label} returned an empty result.`);
+          }
+
+          return {
+            text: translated,
+            detectedSourceLanguage:
+              Array.isArray(response) && typeof response[2] === "string"
+                ? response[2]
+                : sourceLanguage,
+          };
+        },
+      });
+    }
+
+    registerGoogleMirrorProvider(
+      "google-web",
+      "Google Web",
+      "https://translate.googleapis.com",
+      "https://translate.google.com/"
+    );
+    registerGoogleMirrorProvider(
+      "google-fr-web",
+      "Google FR Web",
+      "https://translate.google.fr",
+      "https://translate.google.fr/"
+    );
+    registerGoogleMirrorProvider(
+      "google-de-web",
+      "Google DE Web",
+      "https://translate.google.de",
+      "https://translate.google.de/"
+    );
+
+    const BING_BOOTSTRAP_TTL_MS = 30 * 60 * 1000;
+    let bingBootstrap = null;
+    let bingBootstrapExpiresAt = 0;
+
+    function parseBingBootstrap(html) {
+      const igMatch = html.match(/IG:"([^"]+)"/);
+      const abuseMatch = html.match(
+        /params_AbusePreventionHelper\s*=\s*\[(\d+),"([^"]+)",\d+\]/
+      );
+      const iidMatches = Array.from(
+        html.matchAll(/data-iid="(translator\.\d+)"/g),
+        (match) => match[1]
+      );
+      const iid = iidMatches.length ? iidMatches[iidMatches.length - 1] : "";
+
+      if (!igMatch || !abuseMatch || !iid) {
+        throw new Error("Failed to initialize Bing translator session.");
+      }
+
+      return {
+        ig: igMatch[1],
+        iid,
+        key: abuseMatch[1],
+        token: abuseMatch[2],
+      };
+    }
+
+    async function ensureBingBootstrap(forceRefresh) {
+      const now = Date.now();
+      if (!forceRefresh && bingBootstrap && bingBootstrapExpiresAt > now) {
+        return bingBootstrap;
+      }
+
+      const response = await request({
+        method: "GET",
+        url: "https://www.bing.com/translator",
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        timeout: 15000,
+      });
+
+      bingBootstrap = Object.assign(parseBingBootstrap(response.responseText || ""), {
+        cookie: parseResponseCookies(response.responseHeaders),
+      });
+      bingBootstrapExpiresAt = now + BING_BOOTSTRAP_TTL_MS;
+      return bingBootstrap;
+    }
+
+    async function translateWithBing(text, settings, retried) {
+      const bootstrap = await ensureBingBootstrap(retried);
+      const targetLanguage = mapLanguageCode(settings.targetLanguage, "bing-web");
+      const sourceLanguage =
+        settings.sourceLanguage && settings.sourceLanguage !== "auto"
+          ? settings.sourceLanguage
+          : "auto-detect";
+
+      const response = await requestJson({
+        method: "POST",
+        url:
+          "https://www.bing.com/ttranslatev3" +
+          `?isVertical=1&&IG=${encodeURIComponent(bootstrap.ig)}` +
+          `&IID=${encodeURIComponent(bootstrap.iid)}`,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          Accept: "application/json, text/plain, */*",
+          Origin: "https://www.bing.com",
+          Referer: "https://www.bing.com/translator",
+        },
+        cookie: bootstrap.cookie,
+        data: buildFormBody({
+          fromLang: sourceLanguage,
+          text,
+          to: targetLanguage,
+          tryFetchingGenderDebiasedTranslations: "true",
+          token: bootstrap.token,
+          key: bootstrap.key,
+        }),
+        timeout: 15000,
+      });
+
+      const firstItem = Array.isArray(response) ? response[0] : null;
+      const firstTranslation =
+        firstItem && Array.isArray(firstItem.translations) ? firstItem.translations[0] : null;
+      const translated = firstTranslation && firstTranslation.text ? firstTranslation.text : "";
+      const errorMessage =
+        response && typeof response.errorMessage === "string" ? response.errorMessage.trim() : "";
+
+      if (translated) {
+        return {
+          text: translated,
+          detectedSourceLanguage:
+            firstItem &&
+            firstItem.detectedLanguage &&
+            typeof firstItem.detectedLanguage.language === "string"
+              ? firstItem.detectedLanguage.language
+              : sourceLanguage,
+        };
+      }
+
+      if (!retried) {
+        return translateWithBing(text, settings, true);
+      }
+
+      throw new Error(errorMessage || "Bing returned an empty result.");
+    }
+
+    builtInProviders.set("bing-web", {
+      id: "bing-web",
+      label: "Bing Web",
       async translateText(text, settings) {
-        const targetLanguage = mapLanguageCode(settings.targetLanguage, "google-web");
+        return translateWithBing(text, settings, false);
+      },
+    });
+
+    function buildLaraPayload(text, targetLanguage, sourceLanguage) {
+      return JSON.stringify({
+        q: text,
+        source: sourceLanguage === "auto" ? "" : sourceLanguage,
+        target: targetLanguage,
+        instructions: [],
+        style: "faithful",
+        adapt_to: [],
+        glossaries: [],
+        content_type: "text/plain",
+      });
+    }
+
+    function parseLaraTranslation(response, fallbackSourceLanguage) {
+      const content = response && response.content ? response.content : null;
+      const translations = content && Array.isArray(content.translations) ? content.translations : [];
+      const translated = translations
+        .map((item) => (item && typeof item.translation === "string" ? item.translation : ""))
+        .join("")
+        .trim();
+      const quota = content && content.quota ? content.quota : null;
+
+      if (!translated) {
+        if (
+          quota &&
+          Number.isFinite(Number(quota.current_value)) &&
+          Number.isFinite(Number(quota.threshold)) &&
+          Number(quota.current_value) >= Number(quota.threshold)
+        ) {
+          throw new Error("Lara quota exceeded.");
+        }
+
+        throw new Error(
+          response && typeof response.status !== "undefined"
+            ? `Lara error ${response.status}`
+            : "Lara returned an empty result."
+        );
+      }
+
+      return {
+        text: translated,
+        detectedSourceLanguage:
+          content && typeof content.source_language === "string"
+            ? content.source_language
+            : fallbackSourceLanguage,
+      };
+    }
+
+    builtInProviders.set("lara-web", {
+      id: "lara-web",
+      label: "Lara Web",
+      async translateText(text, settings) {
+        const targetLanguage = mapLanguageCode(settings.targetLanguage, "lara-web");
         const sourceLanguage = settings.sourceLanguage || "auto";
+
+        const response = await requestJson({
+          method: "POST",
+          url: "https://webapi.laratranslate.com/translate/segmented",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/plain, */*",
+            Origin: "https://app.laratranslate.com",
+            Referer: "https://app.laratranslate.com/",
+            "X-Lara-Client": "Webapp",
+          },
+          data: buildLaraPayload(text, targetLanguage, sourceLanguage),
+          timeout: 15000,
+        });
+
+        return parseLaraTranslation(response, sourceLanguage);
+      },
+    });
+
+    const QQ_BOOTSTRAP_TTL_MS = 10 * 60 * 1000;
+    let qqBootstrap = null;
+    let qqBootstrapExpiresAt = 0;
+
+    async function ensureQqBootstrap(forceRefresh) {
+      const now = Date.now();
+      if (!forceRefresh && qqBootstrap && qqBootstrapExpiresAt > now) {
+        return qqBootstrap;
+      }
+
+      const pageResponse = await request({
+        method: "GET",
+        url: "https://fanyi.qq.com/",
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+      });
+      const html = pageResponse.responseText || "";
+      const reauthMatch = html.match(/reauthuri\s*=\s*["']([^"']+)["']/i);
+
+      if (!reauthMatch) {
+        throw new Error("Failed to initialize QQ Fanyi session.");
+      }
+
+      const initialCookie = parseResponseCookies(pageResponse.responseHeaders);
+      const authResponse = await request({
+        method: "POST",
+        url: `https://fanyi.qq.com/api/${reauthMatch[1]}`,
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          Origin: "https://fanyi.qq.com",
+          Referer: "https://fanyi.qq.com/",
+        },
+        cookie: initialCookie,
+        timeout: 15000,
+      });
+      const authPayload = JSON.parse(authResponse.responseText || "{}");
+      const mergedCookie = mergeCookieHeaders(
+        initialCookie,
+        parseResponseCookies(authResponse.responseHeaders)
+      );
+
+      if (!authPayload.qtv || !authPayload.qtk) {
+        throw new Error("QQ Fanyi bootstrap did not return qtv/qtk.");
+      }
+
+      qqBootstrap = {
+        qtv: authPayload.qtv,
+        qtk: authPayload.qtk,
+        cookie: mergedCookie,
+      };
+      qqBootstrapExpiresAt = now + QQ_BOOTSTRAP_TTL_MS;
+      return qqBootstrap;
+    }
+
+    async function translateWithQq(text, settings, retried) {
+      const bootstrap = await ensureQqBootstrap(retried);
+      const targetLanguage = mapLanguageCode(settings.targetLanguage, "qq-web");
+      const sourceLanguage = settings.sourceLanguage || "auto";
+      const response = await requestJson({
+        method: "POST",
+        url: "https://fanyi.qq.com/api/translate",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          Accept: "application/json, text/plain, */*",
+          Origin: "https://fanyi.qq.com",
+          Referer: "https://fanyi.qq.com/",
+        },
+        cookie: bootstrap.cookie,
+        data: buildFormBody({
+          source: sourceLanguage,
+          target: targetLanguage,
+          sourceText: text,
+          qtv: bootstrap.qtv,
+          qtk: bootstrap.qtk,
+          sessionUuid: `translate_uuid${Date.now()}`,
+        }),
+        timeout: 15000,
+      });
+
+      const records =
+        response && response.translate && Array.isArray(response.translate.records)
+          ? response.translate.records
+          : [];
+      const translated = records
+        .map((item) => (item && typeof item.targetText === "string" ? item.targetText : ""))
+        .join("")
+        .trim();
+      const detected =
+        response && response.translate && typeof response.translate.source === "string"
+          ? response.translate.source
+          : sourceLanguage;
+
+      if (translated) {
+        return {
+          text: translated,
+          detectedSourceLanguage: detected,
+        };
+      }
+
+      if (!retried) {
+        return translateWithQq(text, settings, true);
+      }
+
+      throw new Error(
+        response && response.message
+          ? `QQ Fanyi error: ${response.message}`
+          : "QQ Fanyi returned an empty result."
+      );
+    }
+
+    builtInProviders.set("qq-web", {
+      id: "qq-web",
+      label: "QQ Fanyi",
+      async translateText(text, settings) {
+        return translateWithQq(text, settings, false);
+      },
+    });
+
+    function createYandexRequestId() {
+      return `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}-0-0`;
+    }
+
+    builtInProviders.set("yandex-web", {
+      id: "yandex-web",
+      label: "Yandex Web",
+      async translateText(text, settings) {
+        const targetLanguage = mapLanguageCode(settings.targetLanguage, "yandex-web");
+        const sourceLanguage = settings.sourceLanguage || "auto";
+        const lang =
+          sourceLanguage === "auto"
+            ? targetLanguage
+            : `${sourceLanguage}-${targetLanguage}`;
+
         const response = await requestJson({
           method: "POST",
           url:
-            "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t" +
-            `&sl=${encodeURIComponent(sourceLanguage)}` +
-            `&tl=${encodeURIComponent(targetLanguage)}`,
+            "https://translate.yandex.net/api/v1/tr.json/translate" +
+            `?id=${encodeURIComponent(createYandexRequestId())}` +
+            "&srv=tr-text&reason=auto&format=text" +
+            `&lang=${encodeURIComponent(lang)}`,
           headers: {
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             Accept: "application/json, text/plain, */*",
+            Origin: "https://translate.yandex.com",
+            Referer: "https://translate.yandex.com/",
           },
           data: buildFormBody({
-            q: text,
+            text,
           }),
+          timeout: 15000,
         });
 
-        const translated = parseGoogleTranslation(response);
+        const translated = Array.isArray(response.text) ? response.text.join(" ").trim() : "";
+        const detected =
+          response && typeof response.lang === "string" && response.lang.includes("-")
+            ? response.lang.split("-")[0]
+            : sourceLanguage;
+
         if (!translated) {
-          throw new Error("Google returned an empty result.");
+          throw new Error(
+            response && response.message
+              ? `Yandex error: ${response.message}`
+              : "Yandex returned an empty result."
+          );
+        }
+
+        return {
+          text: translated,
+          detectedSourceLanguage: detected,
+        };
+      },
+    });
+
+    const YOUDAO_BOOTSTRAP_TTL_MS = 10 * 60 * 1000;
+    const YOUDAO_BOOTSTRAP_SIGN_KEY = "EZAmCfVOH2CrBGMtPrtIPUzyv3bheLdk";
+    const YOUDAO_BOOTSTRAP_KEY_ID = "ai-translate-llm-pre";
+    const YOUDAO_KEY_ID = "ai-translate-llm";
+    const YOUDAO_PRODUCT = "webfanyi";
+    const YOUDAO_APP_VERSION = "12.0.0";
+    const YOUDAO_VENDOR = "web";
+    const YOUDAO_KEYFROM = "fanyi.web";
+    const YOUDAO_AI_CLIENT = "webaitrans";
+    const YOUDAO_AI_KEYFROM = "webfanyi.webaitrans";
+    const YOUDAO_FALLBACK_UUID = "abcdefg";
+    let youdaoBootstrap = null;
+    let youdaoBootstrapExpiresAt = 0;
+
+    function buildYoudaoSignedFields(fields, pointParam, secretKey) {
+      const signatureInput = pointParam
+        .map((field) => {
+          if (field === "key") {
+            return `key=${secretKey}`;
+          }
+          return `${field}=${fields[field] == null ? "" : String(fields[field])}`;
+        })
+        .join("&");
+
+      return Object.assign({}, fields, {
+        sign: md5(signatureInput),
+        pointParam: pointParam.join(","),
+      });
+    }
+
+    function buildMultipartBody(payload) {
+      const boundary = `----MWTBoundary${Date.now().toString(16)}${Math.random()
+        .toString(16)
+        .slice(2)}`;
+      const parts = [];
+
+      for (const [key, value] of Object.entries(payload)) {
+        parts.push(
+          `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="${key}"\r\n\r\n` +
+            `${value == null ? "" : String(value)}\r\n`
+        );
+      }
+      parts.push(`--${boundary}--\r\n`);
+
+      return {
+        boundary,
+        body: parts.join(""),
+      };
+    }
+
+    function parseTranslateDirection(payload, fallbackSourceLanguage, fallbackTargetLanguage) {
+      const direction =
+        payload &&
+        payload.data &&
+        typeof payload.data.translateDirection === "string" &&
+        payload.data.translateDirection.includes("2")
+          ? payload.data.translateDirection
+          : "";
+      const [detectedSourceLanguage, detectedTargetLanguage] = direction
+        ? direction.split("2")
+        : [fallbackSourceLanguage, fallbackTargetLanguage];
+
+      return {
+        sourceLanguage: detectedSourceLanguage || fallbackSourceLanguage,
+        targetLanguage: detectedTargetLanguage || fallbackTargetLanguage,
+      };
+    }
+
+    function parseYoudaoChatStream(responseText, fallbackSourceLanguage) {
+      const blocks = String(responseText || "").split(/\r?\n\r?\n+/);
+      let translated = "";
+      let detectedSourceLanguage = fallbackSourceLanguage;
+
+      for (const block of blocks) {
+        const lines = block
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        if (lines.length === 0) {
+          continue;
+        }
+
+        const dataLines = lines
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim());
+        if (dataLines.length === 0) {
+          continue;
+        }
+
+        let payload = null;
+        try {
+          payload = JSON.parse(dataLines.join("\n"));
+        } catch (error) {
+          continue;
+        }
+
+        if (
+          payload &&
+          typeof payload.translateDirection === "string" &&
+          payload.translateDirection.includes("2")
+        ) {
+          detectedSourceLanguage =
+            payload.translateDirection.split("2")[0] || detectedSourceLanguage;
+        }
+        if (payload && typeof payload.content === "string" && payload.content) {
+          translated += payload.content;
+        }
+      }
+
+      if (!translated.trim()) {
+        throw new Error("Youdao returned an empty result.");
+      }
+
+      return {
+        text: translated.trim(),
+        detectedSourceLanguage,
+      };
+    }
+
+    async function fetchYoudaoJson(options) {
+      const response = await request(options);
+      return {
+        response,
+        payload: JSON.parse(response.responseText || "{}"),
+      };
+    }
+
+    async function ensureYoudaoBootstrap(forceRefresh) {
+      const now = Date.now();
+      if (!forceRefresh && youdaoBootstrap && youdaoBootstrapExpiresAt > now) {
+        return youdaoBootstrap;
+      }
+
+      const pageResponse = await request({
+        method: "GET",
+        url: "https://fanyi.youdao.com/",
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        timeout: 15000,
+      });
+
+      const initialCookie = parseResponseCookies(pageResponse.responseHeaders);
+      const yduuid = md5(`${Date.now()}-${Math.random()}`);
+      const secretFields = buildYoudaoSignedFields(
+        {
+          keyid: YOUDAO_BOOTSTRAP_KEY_ID,
+          client: "fanyideskweb",
+          product: YOUDAO_PRODUCT,
+          appVersion: YOUDAO_APP_VERSION,
+          vendor: YOUDAO_VENDOR,
+          mysticTime: String(Date.now()),
+          keyfrom: YOUDAO_KEYFROM,
+          mid: "1",
+          screen: "1",
+          model: "1",
+          network: "wifi",
+          abtest: "0",
+          yduuid,
+        },
+        ["client", "mysticTime", "product", "key"],
+        YOUDAO_BOOTSTRAP_SIGN_KEY
+      );
+
+      const { response, payload } = await fetchYoudaoJson({
+        method: "GET",
+        url: `https://luna-ai.youdao.com/translate_llm/secret?${buildFormBody(secretFields)}`,
+        headers: {
+          Accept: "application/json, text/plain, */*",
+        },
+        cookie: initialCookie,
+        timeout: 15000,
+      });
+
+      const mergedCookie = mergeCookieHeaders(
+        initialCookie,
+        parseResponseCookies(response.responseHeaders)
+      );
+      const token =
+        payload && payload.data && typeof payload.data.token === "string" ? payload.data.token : "";
+      const secretKey =
+        payload && payload.data && typeof payload.data.secretKey === "string"
+          ? payload.data.secretKey
+          : "";
+
+      if (!token || !secretKey) {
+        throw new Error("Failed to initialize Youdao session.");
+      }
+
+      youdaoBootstrap = {
+        cookie: mergedCookie,
+        token,
+        secretKey,
+        yduuid,
+      };
+      youdaoBootstrapExpiresAt = now + YOUDAO_BOOTSTRAP_TTL_MS;
+      return youdaoBootstrap;
+    }
+
+    async function warmYoudaoConversation(bootstrap) {
+      const signedFields = buildYoudaoSignedFields(
+        {
+          product: YOUDAO_PRODUCT,
+          appVersion: YOUDAO_APP_VERSION,
+          client: "web",
+          mid: "1",
+          vendor: YOUDAO_VENDOR,
+          screen: "1",
+          model: "1",
+          imei: "1",
+          network: "wifi",
+          keyfrom: YOUDAO_KEYFROM,
+          keyid: YOUDAO_KEY_ID,
+          mysticTime: String(Date.now()),
+          yduuid: bootstrap.yduuid,
+          abtest: "0",
+          token: bootstrap.token,
+        },
+        [
+          "abtest",
+          "appVersion",
+          "client",
+          "imei",
+          "keyfrom",
+          "keyid",
+          "mid",
+          "model",
+          "mysticTime",
+          "network",
+          "product",
+          "screen",
+          "token",
+          "vendor",
+          "yduuid",
+          "key",
+        ],
+        bootstrap.secretKey
+      );
+
+      await request({
+        method: "GET",
+        url: `https://luna-ai.youdao.com/translate_llm/v3/uuid/generate?${buildFormBody(
+          signedFields
+        )}`,
+        headers: {
+          Accept: "application/json, text/plain, */*",
+        },
+        cookie: bootstrap.cookie,
+        timeout: 15000,
+      });
+    }
+
+    async function translateWithYoudao(text, settings, retried) {
+      try {
+        const bootstrap = await ensureYoudaoBootstrap(retried);
+        const requestedTargetLanguage = mapLanguageCode(settings.targetLanguage, "youdao-web");
+        const requestedSourceLanguage =
+          settings.sourceLanguage && settings.sourceLanguage !== "auto"
+            ? settings.sourceLanguage
+            : "auto";
+        const encodedInput = encodeURIComponent(text);
+        const directionFields = buildYoudaoSignedFields(
+          {
+            product: YOUDAO_PRODUCT,
+            appVersion: YOUDAO_APP_VERSION,
+            client: "web",
+            mid: "1",
+            vendor: YOUDAO_VENDOR,
+            screen: "1",
+            model: "1",
+            imei: "1",
+            network: "wifi",
+            keyfrom: YOUDAO_KEYFROM,
+            keyid: YOUDAO_KEY_ID,
+            mysticTime: String(Date.now()),
+            yduuid: YOUDAO_FALLBACK_UUID,
+            abtest: "0",
+            token: bootstrap.token,
+            input: encodedInput,
+          },
+          [
+            "abtest",
+            "appVersion",
+            "client",
+            "imei",
+            "input",
+            "keyfrom",
+            "keyid",
+            "mid",
+            "model",
+            "mysticTime",
+            "network",
+            "product",
+            "screen",
+            "token",
+            "vendor",
+            "yduuid",
+            "key",
+          ],
+          bootstrap.secretKey
+        );
+        const directionMultipart = buildMultipartBody(directionFields);
+        const directionPayload = await requestJson({
+          method: "POST",
+          url: "https://luna-ai.youdao.com/translate_llm/v3/translateDirection",
+          headers: {
+            "Content-Type": `multipart/form-data; boundary=${directionMultipart.boundary}`,
+            Accept: "application/json, text/plain, */*",
+            Origin: "https://fanyi.youdao.com",
+            Referer: "https://fanyi.youdao.com/",
+          },
+          cookie: bootstrap.cookie,
+          data: directionMultipart.body,
+          timeout: 15000,
+        });
+
+        const direction = parseTranslateDirection(
+          directionPayload,
+          requestedSourceLanguage,
+          requestedTargetLanguage
+        );
+
+        try {
+          await warmYoudaoConversation(bootstrap);
+        } catch (error) {
+          // The chat request does not consume the generated id directly.
+        }
+
+        const chatFields = buildYoudaoSignedFields(
+          {
+            product: YOUDAO_PRODUCT,
+            appVersion: YOUDAO_APP_VERSION,
+            client: YOUDAO_AI_CLIENT,
+            mid: "1",
+            vendor: YOUDAO_VENDOR,
+            screen: "1",
+            model: "1",
+            imei: "1",
+            network: "wifi",
+            keyfrom: YOUDAO_AI_KEYFROM,
+            keyid: YOUDAO_KEY_ID,
+            mysticTime: String(Date.now()),
+            yduuid: bootstrap.yduuid,
+            functionEnglishName: "LLM_translate",
+            input: encodedInput,
+            useTerm: "0",
+            free: "false",
+            singleBox: "false",
+            fromLang: direction.sourceLanguage,
+            toLang: direction.targetLanguage,
+            roundNo: "1",
+            showSuggest: "0",
+            token: bootstrap.token,
+            source: YOUDAO_AI_CLIENT,
+          },
+          [
+            "appVersion",
+            "client",
+            "free",
+            "fromLang",
+            "functionEnglishName",
+            "imei",
+            "input",
+            "keyfrom",
+            "keyid",
+            "mid",
+            "model",
+            "mysticTime",
+            "network",
+            "product",
+            "roundNo",
+            "screen",
+            "showSuggest",
+            "singleBox",
+            "source",
+            "toLang",
+            "token",
+            "useTerm",
+            "vendor",
+            "yduuid",
+            "key",
+          ],
+          bootstrap.secretKey
+        );
+        const chatMultipart = buildMultipartBody(chatFields);
+        const chatResponse = await request({
+          method: "POST",
+          url: "https://luna-ai.youdao.com/translate_llm/v3/chat",
+          headers: {
+            "Content-Type": `multipart/form-data; boundary=${chatMultipart.boundary}`,
+            Accept: "text/event-stream, text/plain, */*",
+            Origin: "https://fanyi.youdao.com",
+            Referer: "https://fanyi.youdao.com/",
+          },
+          cookie: bootstrap.cookie,
+          data: chatMultipart.body,
+          timeout: 30000,
+        });
+
+        return parseYoudaoChatStream(chatResponse.responseText || "", direction.sourceLanguage);
+      } catch (error) {
+        if (!retried) {
+          return translateWithYoudao(text, settings, true);
+        }
+        throw error;
+      }
+    }
+
+    builtInProviders.set("youdao-web", {
+      id: "youdao-web",
+      label: "Youdao Web",
+      async translateText(text, settings) {
+        return translateWithYoudao(text, settings, false);
+      },
+    });
+
+    function buildDeepLTimestamp(text) {
+      const letterCount = (String(text).match(/i/g) || []).length + 1;
+      const now = Date.now();
+      return now - (now % letterCount) + letterCount;
+    }
+
+    builtInProviders.set("deepl-web", {
+      id: "deepl-web",
+      label: "DeepL Web",
+      async translateText(text, settings) {
+        const targetLanguage = mapLanguageCode(settings.targetLanguage, "deepl-web");
+        const sourceLanguage =
+          settings.sourceLanguage && settings.sourceLanguage !== "auto"
+            ? settings.sourceLanguage.toUpperCase()
+            : "AUTO";
+
+        const response = await requestJson({
+          method: "POST",
+          url: "https://www2.deepl.com/jsonrpc?method=LMT_handle_texts",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/plain, */*",
+            Origin: "https://www.deepl.com",
+            Referer: "https://www.deepl.com/en/translator",
+          },
+          data: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "LMT_handle_texts",
+            id: Date.now(),
+            params: {
+              texts: [
+                {
+                  text,
+                  requestAlternatives: 0,
+                },
+              ],
+              splitting: "newlines",
+              lang: {
+                source_lang_user_selected: sourceLanguage,
+                target_lang: targetLanguage,
+              },
+              commonJobParams: {
+                mode: "translate",
+              },
+              timestamp: buildDeepLTimestamp(text),
+            },
+          }),
+          timeout: 15000,
+        });
+
+        const translated =
+          response &&
+          response.result &&
+          Array.isArray(response.result.texts) &&
+          response.result.texts[0] &&
+          typeof response.result.texts[0].text === "string"
+            ? response.result.texts[0].text.trim()
+            : "";
+
+        if (!translated) {
+          throw new Error(
+            response && response.error && response.error.message
+              ? `DeepL error: ${response.error.message}`
+              : "DeepL returned an empty result."
+          );
         }
 
         return {
           text: translated,
           detectedSourceLanguage:
-            Array.isArray(response) && typeof response[2] === "string"
-              ? response[2]
+            response &&
+            response.result &&
+            response.result.lang &&
+            typeof response.result.lang.detected === "string"
+              ? response.result.lang.detected
               : sourceLanguage,
+        };
+      },
+    });
+
+    builtInProviders.set("baidu-web", {
+      id: "baidu-web",
+      label: "Baidu Fanyi",
+      async translateText(text, settings) {
+        const targetLanguage = mapLanguageCode(settings.targetLanguage, "baidu-web");
+        const sourceLanguage = settings.sourceLanguage || "auto";
+        const response = await requestJson({
+          method: "POST",
+          url: "https://fanyi.baidu.com/transapi",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            Accept: "application/json, text/plain, */*",
+            Origin: "https://fanyi.baidu.com",
+            Referer: "https://fanyi.baidu.com/",
+          },
+          data: buildFormBody({
+            from: sourceLanguage,
+            to: targetLanguage,
+            query: text,
+            source: "txt",
+          }),
+          timeout: 15000,
+        });
+
+        const translated = Array.isArray(response.data)
+          ? response.data
+              .map((item) => (item && typeof item.dst === "string" ? item.dst : ""))
+              .join("")
+              .trim()
+          : "";
+
+        if (!translated) {
+          throw new Error(
+            response && response.errmsg
+              ? `Baidu error: ${response.errmsg}`
+              : "Baidu returned an empty result."
+          );
+        }
+
+        return {
+          text: translated,
+          detectedSourceLanguage:
+            response && typeof response.from === "string" ? response.from : sourceLanguage,
         };
       },
     });
@@ -902,13 +2066,14 @@
         return sogouBootstrap;
       }
 
-      const html = await requestText({
+      const response = await request({
         method: "GET",
         url: "https://fanyi.sogou.com/text",
         headers: {
           Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         },
       });
+      const html = response.responseText || "";
 
       const uuidMatch = html.match(/"uuid":"([^"]+)"/);
       const secretCodeMatch = html.match(/"secretCode":(\d+)/);
@@ -920,6 +2085,7 @@
       sogouBootstrap = {
         uuid: uuidMatch[1],
         secretCode: secretCodeMatch[1],
+        cookie: parseResponseCookies(response.responseHeaders),
       };
       sogouBootstrapExpiresAt = now + SOGOU_BOOTSTRAP_TTL_MS;
       return sogouBootstrap;
@@ -951,6 +2117,7 @@
           s: signature,
           uuid: bootstrap.uuid,
         }),
+        cookie: bootstrap.cookie,
         timeout: 15000,
       });
 
@@ -959,6 +2126,7 @@
         response && response.data && response.data.detect
           ? response.data.detect.detect
           : from;
+      const errorCode = translation && translation.errorCode != null ? String(translation.errorCode) : "";
 
       if (translation && translation.errorCode === "0" && translation.dit) {
         return {
@@ -967,13 +2135,13 @@
         };
       }
 
-      if (!retried && translation && translation.errorCode === "s10") {
+      if (!retried && (errorCode === "s10" || errorCode === "10")) {
         return translateWithSogou(text, settings, true);
       }
 
       throw new Error(
-        translation && translation.errorCode
-          ? `Sogou error ${translation.errorCode}`
+        errorCode
+          ? `Sogou error ${errorCode}`
           : "Sogou returned an empty result."
       );
     }
@@ -1111,8 +2279,11 @@
       return sourceElement;
     }
 
-    function getMetaText(slotLabel, runtime) {
-      return `${slotLabel} | ${runtime.getCurrentProviderLabel()} | ${runtime.getCurrentLanguageLabel()}`;
+    function getMetaText(slotLabel, runtime, providerId) {
+      const providerLabel = providerId
+        ? runtime.getProviderLabel(providerId)
+        : runtime.getCurrentProviderLabel();
+      return `${slotLabel} | ${providerLabel} | ${runtime.getCurrentLanguageLabel()}`;
     }
 
     function createContext(postNode, extracted) {
@@ -1234,7 +2405,7 @@
                 }
                 runtime.ui.setSectionSuccess(
                   titleSection,
-                  getMetaText("Title", runtime),
+                  getMetaText("Title", runtime, result.providerId),
                   result.text
                 );
               })
@@ -1249,7 +2420,7 @@
                 }
                 runtime.ui.setSectionSuccess(
                   bodySection,
-                  getMetaText("Body", runtime),
+                  getMetaText("Body", runtime, result.providerId),
                   result.text
                 );
               })
@@ -1409,8 +2580,11 @@
       "span",
     ];
 
-    function getMetaText(slotLabel, runtime) {
-      return `${slotLabel} | ${runtime.getCurrentProviderLabel()} | ${runtime.getCurrentLanguageLabel()}`;
+    function getMetaText(slotLabel, runtime, providerId) {
+      const providerLabel = providerId
+        ? runtime.getProviderLabel(providerId)
+        : runtime.getCurrentProviderLabel();
+      return `${slotLabel} | ${providerLabel} | ${runtime.getCurrentLanguageLabel()}`;
     }
 
     function createContext(node, extracted) {
@@ -1517,7 +2691,7 @@
               }
               runtime.ui.setSectionSuccess(
                 titleSection,
-                getMetaText("Title", runtime),
+                getMetaText("Title", runtime, result.providerId),
                 result.text
               );
             })
@@ -1533,7 +2707,7 @@
               }
               runtime.ui.setSectionSuccess(
                 bodySection,
-                getMetaText("Body", runtime),
+                getMetaText("Body", runtime, result.providerId),
                 result.text
               );
             })
@@ -2008,6 +3182,140 @@
     }
   }
 
+  function sleep(ms) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  function getProviderRequestPolicy(providerId) {
+    return PROVIDER_REQUEST_POLICY[providerId] || PROVIDER_REQUEST_POLICY.default;
+  }
+
+  function getProviderRequestState(providerId) {
+    if (!state.providerRequestState.has(providerId)) {
+      state.providerRequestState.set(providerId, {
+        lastStartedAt: 0,
+        blockedUntil: 0,
+      });
+    }
+
+    return state.providerRequestState.get(providerId);
+  }
+
+  async function waitForProviderRequestWindow(providerId) {
+    const policy = getProviderRequestPolicy(providerId);
+    const providerState = getProviderRequestState(providerId);
+    const now = Date.now();
+    const nextAvailableAt = Math.max(
+      providerState.blockedUntil,
+      providerState.lastStartedAt + policy.minIntervalMs
+    );
+    const waitMs = Math.max(0, nextAvailableAt - now);
+
+    if (waitMs > 0) {
+      await sleep(waitMs);
+    }
+
+    providerState.lastStartedAt = Date.now();
+  }
+
+  function noteProviderRequestResult(providerId, error) {
+    const providerState = getProviderRequestState(providerId);
+    if (!error) {
+      if (providerState.blockedUntil < Date.now()) {
+        providerState.blockedUntil = 0;
+      }
+      return;
+    }
+
+    const message = formatError(error).toLowerCase();
+    const shouldBackoff =
+      message.includes("http 429") ||
+      message.includes("allowed translations") ||
+      message.includes("too many requests") ||
+      message.includes("quota") ||
+      message.includes("sogou error 10") ||
+      message.includes("failed to initialize a sogou session") ||
+      message.includes("request timed out");
+
+    if (!shouldBackoff) {
+      return;
+    }
+
+    const policy = getProviderRequestPolicy(providerId);
+    providerState.blockedUntil = Math.max(
+      providerState.blockedUntil,
+      Date.now() + policy.failureBackoffMs
+    );
+  }
+
+  function isProviderLimitError(error) {
+    const message = formatError(error).toLowerCase();
+    return (
+      message.includes("http 429") ||
+      message.includes("allowed translations") ||
+      message.includes("too many requests") ||
+      message.includes("quota") ||
+      message.includes("sogou error 10")
+    );
+  }
+
+  function getAutoBalancedProviderOrder(targetLanguage) {
+    const now = Date.now();
+
+    return getConcreteProviderCatalogEntries()
+      .filter(
+        (provider) => provider.languageMap && provider.languageMap[targetLanguage]
+      )
+      .sort((left, right) => {
+        const leftState = getProviderRequestState(left.id);
+        const rightState = getProviderRequestState(right.id);
+        const leftBlockedFor = Math.max(0, leftState.blockedUntil - now);
+        const rightBlockedFor = Math.max(0, rightState.blockedUntil - now);
+
+        if (leftBlockedFor !== rightBlockedFor) {
+          return leftBlockedFor - rightBlockedFor;
+        }
+        if (leftState.lastStartedAt !== rightState.lastStartedAt) {
+          return leftState.lastStartedAt - rightState.lastStartedAt;
+        }
+
+        return left.id.localeCompare(right.id);
+      })
+      .map((provider) => provider.id);
+  }
+
+  function getProviderAttemptOrder(primaryProviderId, targetLanguage) {
+    if (isVirtualProviderId(primaryProviderId)) {
+      return getAutoBalancedProviderOrder(targetLanguage);
+    }
+
+    const primary = [primaryProviderId];
+    const fallbacks = getAutoBalancedProviderOrder(targetLanguage).filter(
+      (providerId) => providerId !== primaryProviderId
+    );
+
+    return primary.concat(fallbacks);
+  }
+
+  function promoteProviderChoice(nextProviderId, reason) {
+    const normalized = normalizeSettings(
+      Object.assign({}, state.settings, {
+        provider: nextProviderId,
+      })
+    );
+
+    if (normalized.provider === state.settings.provider) {
+      return;
+    }
+
+    state.settings = normalized;
+    state.uiNotice = `Auto-switched to ${getProviderLabel(nextProviderId)} after ${reason}.`;
+    writeSettings(normalized);
+    syncSettingsUi();
+  }
+
   function createProviderRuntime(providerId) {
     return {
       providerId,
@@ -2015,6 +3323,8 @@
       requestText,
       requestJson,
       buildFormBody,
+      parseResponseCookies,
+      mergeCookieHeaders,
       parseGoogleTranslation,
       compareVersions,
       md5,
@@ -2036,12 +3346,50 @@
     });
 
     if (!state.translationCache.has(cacheKey)) {
-      const task = ensureProviderLoaded(providerId)
-        .then((provider) =>
-          enqueueRequest(() =>
-            provider.translateText(text, settingsSnapshot, createProviderRuntime(providerId))
-          )
-        )
+      const task = enqueueRequest(async () => {
+        const providerAttemptOrder = getProviderAttemptOrder(
+          providerId,
+          settingsSnapshot.targetLanguage
+        );
+        let lastError = null;
+
+        for (const candidateProviderId of providerAttemptOrder) {
+          const candidateSettings = Object.assign({}, settingsSnapshot, {
+            provider: candidateProviderId,
+          });
+
+          try {
+            const provider = await ensureProviderLoaded(candidateProviderId);
+            await waitForProviderRequestWindow(candidateProviderId);
+            const result = await provider.translateText(
+              text,
+              candidateSettings,
+              createProviderRuntime(candidateProviderId)
+            );
+            noteProviderRequestResult(candidateProviderId, null);
+
+            if (
+              candidateProviderId !== providerId &&
+              !isVirtualProviderId(providerId)
+            ) {
+              promoteProviderChoice(candidateProviderId, formatError(lastError || "rate limit"));
+            }
+
+            return Object.assign({}, result, {
+              providerId: candidateProviderId,
+            });
+          } catch (error) {
+            noteProviderRequestResult(candidateProviderId, error);
+            lastError = error;
+
+            if (!isProviderLimitError(error)) {
+              throw error;
+            }
+          }
+        }
+
+        throw lastError || new Error("All providers failed.");
+      })
         .catch((error) => {
           state.translationCache.delete(cacheKey);
           throw error;
@@ -2387,14 +3735,22 @@
     registerBuiltInFallbacks();
 
     await ensureProviderCatalogLoaded();
-    state.settings = normalizeSettings(state.settings);
-    try {
-      await ensureProviderLoaded(state.settings.provider);
-    } catch (error) {
-      console.warn(
-        `[modular-web-translator] failed to preload provider ${state.settings.provider}`,
-        error
-      );
+    const normalizedSettings = normalizeSettings(state.settings);
+    const settingsChanged =
+      JSON.stringify(normalizedSettings) !== JSON.stringify(state.settings);
+    state.settings = normalizedSettings;
+    if (settingsChanged) {
+      writeSettings(normalizedSettings);
+    }
+    if (!isVirtualProviderId(state.settings.provider)) {
+      try {
+        await ensureProviderLoaded(state.settings.provider);
+      } catch (error) {
+        console.warn(
+          `[modular-web-translator] failed to preload provider ${state.settings.provider}`,
+          error
+        );
+      }
     }
 
     let manifest;

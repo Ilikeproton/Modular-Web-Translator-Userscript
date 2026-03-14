@@ -132,8 +132,11 @@
     return sourceElement;
   }
 
-  function getMetaText(slotLabel, runtime) {
-    return `${slotLabel} | ${runtime.getCurrentProviderLabel()} | ${runtime.getCurrentLanguageLabel()}`;
+  function getMetaText(slotLabel, runtime, providerId) {
+    const providerLabel = providerId
+      ? runtime.getProviderLabel(providerId)
+      : runtime.getCurrentProviderLabel();
+    return `${slotLabel} | ${providerLabel} | ${runtime.getCurrentLanguageLabel()}`;
   }
 
   function createContext(postNode, extracted) {
@@ -255,7 +258,7 @@
 
             runtime.ui.setSectionSuccess(
               titleSection,
-              getMetaText("Title", runtime),
+              getMetaText("Title", runtime, result.providerId),
               result.text
             );
           })
@@ -271,7 +274,7 @@
 
             runtime.ui.setSectionSuccess(
               bodySection,
-              getMetaText("Body", runtime),
+              getMetaText("Body", runtime, result.providerId),
               result.text
             );
           })

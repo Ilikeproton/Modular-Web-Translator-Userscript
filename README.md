@@ -18,9 +18,10 @@ Works with:
 
 - One install for the core translator runtime
 - Inline translation directly under page content
-- Default `Google Web` translator with switchable providers
+- Default `Auto Balance` mode that distributes requests across multiple providers
 - Remote site modules let new website support ship faster
 - Provider modules can expand without rewriting the core script
+- Automatic provider rotation helps reduce `429` and other rate-limit failures
 - Auto-update support through `@version`, `@updateURL`, and `@downloadURL`
 - Designed for long-term multi-site expansion, not one hardcoded page
 
@@ -45,8 +46,18 @@ Current behavior:
 
 ## Supported Translation Providers
 
-- `Google Web` as the default provider
+Currently shipped and verified providers:
+
+- `Auto Balance` as the default multi-provider strategy
+- `Google Web` as an available provider
+- `Google FR Web` as a Google Translate mirror provider
+- `Google DE Web` as a Google Translate mirror provider
+- `Bing Web` as an additional web translator provider
+- `Lara Web` as an additional web translator provider
+- `Youdao Web` as an additional web translator provider
 - `Sogou Web` as an on-demand provider
+
+Legacy provider files may still exist in the repository for research, but they are not shipped in [`providers/manifest.json`](./providers/manifest.json) unless they pass live verification again.
 
 ## Supported Target Languages
 
@@ -75,8 +86,8 @@ This repository uses three layers:
    - let the project add support for more sites and more page types without forcing a core upgrade
 3. Provider modules
    - defined in [`providers/manifest.json`](./providers/manifest.json)
-   - `Google Web` loads by default
-   - other providers load when the user selects them
+   - `Auto Balance` uses multiple shipped providers together by default
+   - users can still pin a specific provider if they want manual control
 
 This means most day-to-day support expansion can happen through remote modules, while the main userscript only needs updates for runtime changes.
 
@@ -101,9 +112,16 @@ The current Reddit support is the first implementation, not the final scope of t
 |   |-- reddit-feed.module.js
 |   `-- reddit-new.module.js
 |-- providers/
+|   |-- bing-web.provider.js
+|   |-- google-de-web.provider.js
+|   |-- google-fr-web.provider.js
 |   |-- google-web.provider.js
+|   |-- lara-web.provider.js
 |   |-- manifest.json
-|   `-- sogou-web.provider.js
+|   |-- sogou-web.provider.js
+|   `-- youdao-web.provider.js
+|-- scripts/
+|   `-- verify-providers.js
 |-- modular-web-translator-userscript.meta.js
 |-- modular-web-translator-userscript.user.js
 |-- LICENSE
@@ -118,8 +136,14 @@ The current Reddit support is the first implementation, not the final scope of t
 - Reddit feed module: [modules/reddit-feed.module.js](./modules/reddit-feed.module.js)
 - Reddit explore module: [modules/reddit-explore.module.js](./modules/reddit-explore.module.js)
 - Provider registry: [providers/manifest.json](./providers/manifest.json)
-- Default provider: [providers/google-web.provider.js](./providers/google-web.provider.js)
+- Google provider file: [providers/google-web.provider.js](./providers/google-web.provider.js)
+- Google mirror provider: [providers/google-fr-web.provider.js](./providers/google-fr-web.provider.js)
+- Google mirror provider: [providers/google-de-web.provider.js](./providers/google-de-web.provider.js)
+- Additional provider: [providers/bing-web.provider.js](./providers/bing-web.provider.js)
+- Additional provider: [providers/lara-web.provider.js](./providers/lara-web.provider.js)
+- Additional provider: [providers/youdao-web.provider.js](./providers/youdao-web.provider.js)
 - Optional provider: [providers/sogou-web.provider.js](./providers/sogou-web.provider.js)
+- Smoke test script: [scripts/verify-providers.js](./scripts/verify-providers.js)
 
 ## Update Strategy
 
@@ -139,10 +163,15 @@ Provider updates:
 - delivered by `providers/manifest.json` and remote provider files
 - used for new translator engines or provider fixes
 
+## Verification
+
+- Verify shipped providers: `node scripts/verify-providers.js`
+- Verify every provider file in the repository, including legacy experiments: `node scripts/verify-providers.js --all`
+
 ## Privacy
 
 - text selected for translation is sent to third-party translation endpoints
-- current endpoints include `translate.googleapis.com` and `fanyi.sogou.com`
+- current shipped endpoints include `translate.googleapis.com`, `translate.google.fr`, `translate.google.de`, `www.bing.com`, `app.laratranslate.com`, `webapi.laratranslate.com`, `fanyi.youdao.com`, and `fanyi.sogou.com`
 - do not use this script on sensitive content unless you accept that risk
 
 ## Roadmap
@@ -152,7 +181,7 @@ Provider updates:
 - add more translation provider modules
 - keep the core runtime stable so normal support growth does not require constant upgrades
 
-## SEO Keywords
+## Keywords
 
 This repository targets these search intents:
 

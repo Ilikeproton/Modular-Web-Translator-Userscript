@@ -11,13 +11,14 @@
       return sogouBootstrap;
     }
 
-    const html = await runtime.requestText({
+    const response = await runtime.request({
       method: "GET",
       url: "https://fanyi.sogou.com/text",
       headers: {
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       },
     });
+    const html = response.responseText || "";
 
     const uuidMatch = html.match(/"uuid":"([^"]+)"/);
     const secretCodeMatch = html.match(/"secretCode":(\d+)/);
@@ -29,6 +30,7 @@
     sogouBootstrap = {
       uuid: uuidMatch[1],
       secretCode: secretCodeMatch[1],
+      cookie: runtime.parseResponseCookies(response.responseHeaders),
     };
     sogouBootstrapExpiresAt = now + SOGOU_BOOTSTRAP_TTL_MS;
     return sogouBootstrap;
@@ -60,6 +62,7 @@
         s: signature,
         uuid: bootstrap.uuid,
       }),
+      cookie: bootstrap.cookie,
       timeout: 15000,
     });
 
@@ -68,6 +71,7 @@
       response && response.data && response.data.detect
         ? response.data.detect.detect
         : from;
+    const errorCode = translation && translation.errorCode != null ? String(translation.errorCode) : "";
 
     if (translation && translation.errorCode === "0" && translation.dit) {
       return {
@@ -76,13 +80,13 @@
       };
     }
 
-    if (!retried && translation && translation.errorCode === "s10") {
+    if (!retried && (errorCode === "s10" || errorCode === "10")) {
       return translateWithSogou(text, settings, runtime, true);
     }
 
     throw new Error(
-      translation && translation.errorCode
-        ? `Sogou error ${translation.errorCode}`
+      errorCode
+        ? `Sogou error ${errorCode}`
         : "Sogou returned an empty result."
     );
   }

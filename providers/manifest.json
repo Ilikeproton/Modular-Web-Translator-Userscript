@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.0",
+  "version": "1.8.0",
   "cacheTtlMinutes": 30,
   "moduleCacheTtlMinutes": 30,
   "providers": [
@@ -25,11 +25,106 @@
       }
     },
     {
+      "id": "google-fr-web",
+      "label": "Google FR Web",
+      "version": "1.0.0",
+      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/providers/google-fr-web.provider.js",
+      "minRuntimeVersion": "1.5.0",
+      "languageMap": {
+        "zh-CN": "zh-CN",
+        "en": "en",
+        "ja": "ja",
+        "ko": "ko",
+        "fr": "fr",
+        "de": "de",
+        "es": "es",
+        "ru": "ru",
+        "vi": "vi",
+        "th": "th"
+      }
+    },
+    {
+      "id": "google-de-web",
+      "label": "Google DE Web",
+      "version": "1.0.0",
+      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/providers/google-de-web.provider.js",
+      "minRuntimeVersion": "1.5.0",
+      "languageMap": {
+        "zh-CN": "zh-CN",
+        "en": "en",
+        "ja": "ja",
+        "ko": "ko",
+        "fr": "fr",
+        "de": "de",
+        "es": "es",
+        "ru": "ru",
+        "vi": "vi",
+        "th": "th"
+      }
+    },
+    {
+      "id": "bing-web",
+      "label": "Bing Web",
+      "version": "1.1.0",
+      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/providers/bing-web.provider.js",
+      "minRuntimeVersion": "1.7.0",
+      "languageMap": {
+        "zh-CN": "zh-Hans",
+        "en": "en",
+        "ja": "ja",
+        "ko": "ko",
+        "fr": "fr",
+        "de": "de",
+        "es": "es",
+        "ru": "ru",
+        "vi": "vi",
+        "th": "th"
+      }
+    },
+    {
+      "id": "lara-web",
+      "label": "Lara Web",
+      "version": "1.0.0",
+      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/providers/lara-web.provider.js",
+      "minRuntimeVersion": "1.6.0",
+      "languageMap": {
+        "zh-CN": "zh-CN",
+        "en": "en",
+        "ja": "ja",
+        "ko": "ko",
+        "fr": "fr",
+        "de": "de",
+        "es": "es",
+        "ru": "ru",
+        "vi": "vi",
+        "th": "th"
+      }
+    },
+    {
+      "id": "youdao-web",
+      "label": "Youdao Web",
+      "version": "1.1.0",
+      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/providers/youdao-web.provider.js",
+      "minRuntimeVersion": "1.7.0",
+      "languageMap": {
+        "zh-CN": "zh-CHS",
+        "en": "en",
+        "ja": "ja",
+        "ko": "ko",
+        "fr": "fr",
+        "de": "de",
+        "es": "es",
+        "ru": "ru",
+        "vi": "vi",
+        "th": "th"
+      }
+    },
+    {
       "id": "sogou-web",
       "label": "Sogou Web",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/providers/sogou-web.provider.js",
-      "minRuntimeVersion": "1.0.0",
+      "minRuntimeVersion": "1.2.0",
       "languageMap": {
         "zh-CN": "zh-CHS",
         "en": "en",
