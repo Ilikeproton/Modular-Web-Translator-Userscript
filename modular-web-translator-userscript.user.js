@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.9.0
+// @version      1.9.1
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.8.7";
+  const SCRIPT_VERSION = "1.9.1";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
@@ -34,6 +34,10 @@
   const DEFAULT_MANIFEST_TTL_MS = 30 * 60 * 1000;
   const DEFAULT_MODULE_TTL_MS = 30 * 60 * 1000;
   const TRANSLATION_RETRY_COOLDOWN_MS = 15000;
+  const TRANSLATION_BATCH_WINDOW_MS = 80;
+  const GOOGLE_TRANSLATION_BATCH_MAX_ITEMS = 6;
+  const GOOGLE_TRANSLATION_BATCH_MAX_CHARS = 2400;
+  const VIEWPORT_PREFETCH_DISTANCE_PX = 1200;
   const PROVIDER_REQUEST_POLICY = {
     default: {
       minIntervalMs: 1200,
@@ -146,6 +150,7 @@
     providerRegistry: new Map(),
     providerLoadTasks: new Map(),
     translationCache: new Map(),
+    translationBatchQueues: new Map(),
     providerRequestState: new Map(),
     queue: [],
     activeRequests: 0,
@@ -1112,13 +1117,105 @@
   }
 
   function registerBuiltInProviderFallbacks() {
+    function escapeRegExp(value) {
+      return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function buildGoogleBatchEnvelope(texts) {
+      const batchId =
+        `MWT${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+      const packedText = texts
+        .map(
+          (text, index) =>
+            `__${batchId}_BEGIN_${index}__\n${String(text || "")}\n__${batchId}_END_${index}__`
+        )
+        .join("\n");
+
+      return {
+        batchId,
+        packedText,
+      };
+    }
+
+    function parseGoogleBatchEnvelope(translatedText, batchId, expectedCount) {
+      const results = new Array(expectedCount).fill("");
+      const pattern = new RegExp(
+        `__${escapeRegExp(batchId)}_BEGIN_(\\d+)__\\s*([\\s\\S]*?)\\s*__${escapeRegExp(
+          batchId
+        )}_END_\\1__`,
+        "g"
+      );
+
+      let match = null;
+      while ((match = pattern.exec(String(translatedText || "")))) {
+        const index = Number.parseInt(match[1], 10);
+        if (!Number.isInteger(index) || index < 0 || index >= expectedCount) {
+          continue;
+        }
+        results[index] = String(match[2] || "").trim();
+      }
+
+      if (results.some((item) => !item)) {
+        throw new Error("Failed to split Google batch translation.");
+      }
+
+      return results;
+    }
+
     function registerGoogleMirrorProvider(providerId, label, endpointBase, refererUrl) {
+      async function requestGoogleTranslation(text, settings) {
+        const targetLanguage = mapLanguageCode(settings.targetLanguage, providerId);
+        const sourceLanguage = settings.sourceLanguage || "auto";
+        const response = await requestJson({
+          method: "POST",
+          url:
+            `${endpointBase}/translate_a/single?client=gtx&dt=t` +
+            `&sl=${encodeURIComponent(sourceLanguage)}` +
+            `&tl=${encodeURIComponent(targetLanguage)}`,
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            Accept: "application/json, text/plain, */*",
+            Origin: endpointBase,
+            Referer: refererUrl,
+          },
+          data: buildFormBody({
+            q: text,
+          }),
+          timeout: 15000,
+        });
+
+        const translated = parseGoogleTranslation(response);
+        if (!translated) {
+          throw new Error(`${label} returned an empty result.`);
+        }
+
+        return {
+          text: translated,
+          detectedSourceLanguage:
+            Array.isArray(response) && typeof response[2] === "string"
+              ? response[2]
+              : sourceLanguage,
+        };
+      }
+
       builtInProviders.set(providerId, {
         id: providerId,
         label,
         async translateText(text, settings) {
+          return requestGoogleTranslation(text, settings);
+        },
+        async translateTexts(texts, settings) {
+          if (!Array.isArray(texts) || texts.length === 0) {
+            return [];
+          }
+          if (texts.length === 1) {
+            return [await requestGoogleTranslation(texts[0], settings)];
+          }
+
           const targetLanguage = mapLanguageCode(settings.targetLanguage, providerId);
           const sourceLanguage = settings.sourceLanguage || "auto";
+          const envelope = buildGoogleBatchEnvelope(texts);
+
           const response = await requestJson({
             method: "POST",
             url:
@@ -1132,23 +1229,26 @@
               Referer: refererUrl,
             },
             data: buildFormBody({
-              q: text,
+              q: envelope.packedText,
             }),
             timeout: 15000,
           });
 
           const translated = parseGoogleTranslation(response);
-          if (!translated) {
-            throw new Error(`${label} returned an empty result.`);
-          }
+          const detectedSourceLanguage =
+            Array.isArray(response) && typeof response[2] === "string"
+              ? response[2]
+              : sourceLanguage;
+          const splitTexts = parseGoogleBatchEnvelope(
+            translated,
+            envelope.batchId,
+            texts.length
+          );
 
-          return {
-            text: translated,
-            detectedSourceLanguage:
-              Array.isArray(response) && typeof response[2] === "string"
-                ? response[2]
-                : sourceLanguage,
-          };
+          return splitTexts.map((item) => ({
+            text: item,
+            detectedSourceLanguage,
+          }));
         },
       });
     }
@@ -2699,12 +2799,26 @@
       };
     }
 
+    function isElementWithinPrefetchWindow(element, distancePx) {
+      if (!element || typeof element.getBoundingClientRect !== "function") {
+        return true;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const viewportHeight =
+        window.innerHeight || document.documentElement.clientHeight || 800;
+
+      return rect.bottom >= -distancePx && rect.top <= viewportHeight + distancePx;
+    }
+
     function createCollectionController(runtime, options) {
       const contexts = new Set();
       const contextByNode = new WeakMap();
       let scanTimer = null;
       let observer = null;
       let unsubscribe = null;
+      let scrollHandler = null;
+      let resizeHandler = null;
       let lastSettings = runtime.getSettings();
 
       function cleanupDetachedContexts() {
@@ -2773,6 +2887,17 @@
           return;
         }
 
+        const priorityElement = extracted.titleElement || extracted.bodyElement || context.node;
+        if (
+          !context.renderSignature &&
+          !isElementWithinPrefetchWindow(
+            priorityElement,
+            options.prefetchDistancePx || VIEWPORT_PREFETCH_DISTANCE_PX
+          )
+        ) {
+          return;
+        }
+
         const runId = context.runId + 1;
         context.runId = runId;
         context.pendingSignature = signature;
@@ -2783,7 +2908,9 @@
           runtime.ui.setSectionLoading(titleSection, getMetaText("Title", runtime));
           jobs.push(
             runtime
-              .translateText(extracted.title)
+              .translateText(extracted.title, {
+                sourceElement: extracted.titleElement,
+              })
               .then((result) => {
                 if (context.runId !== runId) {
                   return;
@@ -2810,7 +2937,9 @@
           runtime.ui.setSectionLoading(bodySection, getMetaText("Body", runtime));
           jobs.push(
             runtime
-              .translateText(extracted.body)
+              .translateText(extracted.body, {
+                sourceElement: extracted.bodyElement,
+              })
               .then((result) => {
                 if (context.runId !== runId) {
                   return;
@@ -2909,6 +3038,11 @@
         subtree: true,
       });
 
+      scrollHandler = debounce(scheduleScan, Math.max(80, Math.min(200, options.scanDelay)));
+      resizeHandler = debounce(scheduleScan, Math.max(80, Math.min(200, options.scanDelay)));
+      window.addEventListener("scroll", scrollHandler, { passive: true });
+      window.addEventListener("resize", resizeHandler);
+
       unsubscribe = runtime.onSettingsChanged((nextSettings) => {
         const reason =
           nextSettings.targetLanguage !== lastSettings.targetLanguage ? "language" : "provider";
@@ -2922,6 +3056,12 @@
         }
         if (observer) {
           observer.disconnect();
+        }
+        if (scrollHandler) {
+          window.removeEventListener("scroll", scrollHandler);
+        }
+        if (resizeHandler) {
+          window.removeEventListener("resize", resizeHandler);
         }
         if (unsubscribe) {
           unsubscribe();
@@ -3730,7 +3870,327 @@
     };
   }
 
-  function translateText(text) {
+  function isGoogleProviderId(providerId) {
+    return (
+      providerId === "google-web" ||
+      providerId === "google-fr-web" ||
+      providerId === "google-de-web"
+    );
+  }
+
+  function getTranslationBatchConfig(settingsSnapshot) {
+    if (isGoogleProviderId(settingsSnapshot.provider)) {
+      return {
+        batchable: true,
+        maxItems: GOOGLE_TRANSLATION_BATCH_MAX_ITEMS,
+        maxChars: GOOGLE_TRANSLATION_BATCH_MAX_CHARS,
+      };
+    }
+
+    return {
+      batchable: false,
+      maxItems: 1,
+      maxChars: Number.POSITIVE_INFINITY,
+    };
+  }
+
+  function getElementTranslationPriority(element) {
+    if (!element || typeof element.getBoundingClientRect !== "function") {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight || 800;
+
+    if (rect.bottom > 0 && rect.top < viewportHeight) {
+      return Math.max(0, rect.top);
+    }
+    if (rect.top >= viewportHeight) {
+      return 10000 + (rect.top - viewportHeight);
+    }
+
+    return 20000 + Math.abs(rect.bottom);
+  }
+
+  function getTranslationRequestPriority(requestOptions) {
+    if (requestOptions && Number.isFinite(Number(requestOptions.priority))) {
+      return Number(requestOptions.priority);
+    }
+
+    return getElementTranslationPriority(requestOptions && requestOptions.sourceElement);
+  }
+
+  function getTranslationBatchKey(settingsSnapshot) {
+    return JSON.stringify({
+      provider: settingsSnapshot.provider,
+      targetLanguage: settingsSnapshot.targetLanguage,
+      sourceLanguage: settingsSnapshot.sourceLanguage,
+    });
+  }
+
+  function getOrCreateTranslationBatchState(batchKey, settingsSnapshot) {
+    if (!state.translationBatchQueues.has(batchKey)) {
+      state.translationBatchQueues.set(batchKey, {
+        key: batchKey,
+        settingsSnapshot: Object.assign({}, settingsSnapshot),
+        items: [],
+        timer: null,
+        flushing: false,
+      });
+    }
+
+    return state.translationBatchQueues.get(batchKey);
+  }
+
+  function scheduleTranslationBatchFlush(batchState, immediate) {
+    if (batchState.timer) {
+      clearTimeout(batchState.timer);
+      batchState.timer = null;
+    }
+
+    batchState.timer = setTimeout(() => {
+      batchState.timer = null;
+      void flushTranslationBatch(batchState.key);
+    }, immediate ? 0 : TRANSLATION_BATCH_WINDOW_MS);
+  }
+
+  function queueTranslationRequest(text, settingsSnapshot, requestOptions, debugId) {
+    const batchKey = getTranslationBatchKey(settingsSnapshot);
+    const batchState = getOrCreateTranslationBatchState(batchKey, settingsSnapshot);
+
+    return new Promise((resolve, reject) => {
+      batchState.items.push({
+        text,
+        settingsSnapshot,
+        requestOptions: requestOptions || {},
+        priority: getTranslationRequestPriority(requestOptions || {}),
+        resolve,
+        reject,
+        debugId,
+      });
+
+      const batchConfig = getTranslationBatchConfig(settingsSnapshot);
+      const immediate = batchConfig.batchable && batchState.items.length >= batchConfig.maxItems;
+      scheduleTranslationBatchFlush(batchState, immediate);
+    });
+  }
+
+  function takeTranslationBatchChunk(items, batchConfig) {
+    if (!batchConfig.batchable) {
+      return items.splice(0, 1);
+    }
+
+    const chunk = [];
+    let totalChars = 0;
+
+    while (items.length > 0 && chunk.length < batchConfig.maxItems) {
+      const nextItem = items[0];
+      const nextChars = String(nextItem.text || "").length + 96;
+      if (chunk.length > 0 && totalChars + nextChars > batchConfig.maxChars) {
+        break;
+      }
+
+      chunk.push(items.shift());
+      totalChars += nextChars;
+    }
+
+    return chunk.length > 0 ? chunk : items.splice(0, 1);
+  }
+
+  function normalizeProviderResult(result, fallbackSourceLanguage) {
+    const normalized = result && typeof result === "object" ? result : {};
+    const translatedText = typeof normalized.text === "string" ? normalized.text.trim() : "";
+
+    if (!translatedText) {
+      throw new Error("Provider returned an empty result.");
+    }
+
+    return {
+      text: translatedText,
+      detectedSourceLanguage:
+        typeof normalized.detectedSourceLanguage === "string" &&
+        normalized.detectedSourceLanguage
+          ? normalized.detectedSourceLanguage
+          : fallbackSourceLanguage,
+    };
+  }
+
+  async function translateTextsWithProvider(provider, texts, settingsSnapshot, providerId) {
+    const providerRuntime = createProviderRuntime(providerId);
+
+    if (texts.length > 1 && typeof provider.translateTexts === "function") {
+      try {
+        const results = await provider.translateTexts(texts, settingsSnapshot, providerRuntime);
+        if (!Array.isArray(results) || results.length !== texts.length) {
+          throw new Error("Provider returned an invalid batch result.");
+        }
+
+        return results.map((result) =>
+          normalizeProviderResult(result, settingsSnapshot.sourceLanguage || "auto")
+        );
+      } catch (error) {
+        if (isProviderLimitError(error)) {
+          throw error;
+        }
+
+        log(
+          "batch translation fallback to single",
+          providerId,
+          formatError(error)
+        );
+      }
+    }
+
+    const results = [];
+    for (const text of texts) {
+      const result = await provider.translateText(text, settingsSnapshot, providerRuntime);
+      results.push(normalizeProviderResult(result, settingsSnapshot.sourceLanguage || "auto"));
+    }
+    return results;
+  }
+
+  async function executeTranslationBatchItems(batchItems, settingsSnapshot) {
+    const providerId = settingsSnapshot.provider;
+    const providerAttemptOrder = getProviderAttemptOrder(
+      providerId,
+      settingsSnapshot.targetLanguage
+    );
+    const texts = batchItems.map((item) => item.text);
+    const debugIds = batchItems.map((item) => item.debugId);
+    let lastError = null;
+
+    log("batch start", {
+      debugIds,
+      provider: providerId,
+      targetLanguage: settingsSnapshot.targetLanguage,
+      sourceLanguage: settingsSnapshot.sourceLanguage,
+      count: batchItems.length,
+      preview: texts.slice(0, 3).map((item) => previewText(item)),
+    });
+    log("batch provider order", {
+      debugIds,
+      order: providerAttemptOrder,
+    });
+
+    for (const candidateProviderId of providerAttemptOrder) {
+      const candidateSettings = Object.assign({}, settingsSnapshot, {
+        provider: candidateProviderId,
+      });
+
+      try {
+        log("batch trying provider", {
+          debugIds,
+          provider: candidateProviderId,
+          count: batchItems.length,
+        });
+        const provider = await ensureProviderLoaded(candidateProviderId);
+        await waitForProviderRequestWindow(candidateProviderId);
+        const results = await translateTextsWithProvider(
+          provider,
+          texts,
+          candidateSettings,
+          candidateProviderId
+        );
+        noteProviderRequestResult(candidateProviderId, null);
+
+        if (candidateProviderId !== providerId && !isVirtualProviderId(providerId)) {
+          promoteProviderChoice(candidateProviderId, formatError(lastError || "rate limit"));
+        }
+
+        batchItems.forEach((item, index) => {
+          item.resolve(
+            Object.assign({}, results[index], {
+              providerId: candidateProviderId,
+            })
+          );
+        });
+
+        log("batch success", {
+          debugIds,
+          provider: candidateProviderId,
+          count: batchItems.length,
+        });
+        return;
+      } catch (error) {
+        noteProviderRequestResult(candidateProviderId, error);
+        lastError = error;
+        console.warn(
+          "[modular-web-translator]",
+          "batch provider failed",
+          {
+            debugIds,
+            provider: candidateProviderId,
+            count: batchItems.length,
+            error: formatError(error),
+          }
+        );
+
+        if (isVirtualProviderId(providerId)) {
+          if (!isProviderLimitError(error)) {
+            blockProviderTemporarily(candidateProviderId, 60000);
+          }
+          continue;
+        }
+
+        if (!isProviderLimitError(error)) {
+          break;
+        }
+      }
+    }
+
+    const finalError = lastError || new Error("All providers failed.");
+    console.error("[modular-web-translator]", "batch all providers failed", {
+      debugIds,
+      count: batchItems.length,
+      error: formatError(finalError),
+    });
+    batchItems.forEach((item) => {
+      item.reject(finalError);
+    });
+  }
+
+  async function flushTranslationBatch(batchKey) {
+    const batchState = state.translationBatchQueues.get(batchKey);
+    if (!batchState || batchState.flushing) {
+      return;
+    }
+
+    const pendingItems = batchState.items
+      .splice(0)
+      .sort((left, right) => left.priority - right.priority);
+
+    if (pendingItems.length === 0) {
+      state.translationBatchQueues.delete(batchKey);
+      return;
+    }
+
+    batchState.flushing = true;
+    const batchConfig = getTranslationBatchConfig(batchState.settingsSnapshot);
+
+    try {
+      while (pendingItems.length > 0) {
+        const chunk = takeTranslationBatchChunk(pendingItems, batchConfig);
+        void enqueueRequest(() =>
+          executeTranslationBatchItems(chunk, batchState.settingsSnapshot)
+        ).catch((error) => {
+          console.error("[modular-web-translator] translation batch execution failed", error);
+          for (const item of chunk) {
+            item.reject(error);
+          }
+        });
+      }
+    } finally {
+      batchState.flushing = false;
+      if (batchState.items.length === 0) {
+        state.translationBatchQueues.delete(batchKey);
+      } else {
+        scheduleTranslationBatchFlush(batchState, true);
+      }
+    }
+  }
+
+  function translateText(text, requestOptions) {
     const settingsSnapshot = Object.assign({}, state.settings);
     const providerId = settingsSnapshot.provider;
     const debugId = ++state.translationDebugCounter;
@@ -3743,82 +4203,20 @@
     });
 
     if (!state.translationCache.has(cacheKey)) {
-      const task = enqueueRequest(async () => {
-        const providerAttemptOrder = getProviderAttemptOrder(
-          providerId,
-          settingsSnapshot.targetLanguage
-        );
-        let lastError = null;
+      log(`tx#${debugId} queued`, {
+        provider: providerId,
+        targetLanguage: settingsSnapshot.targetLanguage,
+        sourceLanguage: settingsSnapshot.sourceLanguage,
+        priority: getTranslationRequestPriority(requestOptions || {}),
+        text: previewText(text),
+      });
 
-        log(`tx#${debugId} start`, {
-          provider: providerId,
-          targetLanguage: settingsSnapshot.targetLanguage,
-          sourceLanguage: settingsSnapshot.sourceLanguage,
-          text: previewText(text),
-        });
-        log(`tx#${debugId} provider order`, providerAttemptOrder);
-
-        for (const candidateProviderId of providerAttemptOrder) {
-          const candidateSettings = Object.assign({}, settingsSnapshot, {
-            provider: candidateProviderId,
-          });
-
-          try {
-            log(`tx#${debugId} trying provider`, candidateProviderId);
-            const provider = await ensureProviderLoaded(candidateProviderId);
-            await waitForProviderRequestWindow(candidateProviderId);
-            const result = await provider.translateText(
-              text,
-              candidateSettings,
-              createProviderRuntime(candidateProviderId)
-            );
-            noteProviderRequestResult(candidateProviderId, null);
-
-            if (
-              candidateProviderId !== providerId &&
-              !isVirtualProviderId(providerId)
-            ) {
-              promoteProviderChoice(candidateProviderId, formatError(lastError || "rate limit"));
-            }
-
-            log(`tx#${debugId} success`, {
-              provider: candidateProviderId,
-              detectedSourceLanguage: result.detectedSourceLanguage || candidateSettings.sourceLanguage,
-              text: previewText(result.text),
-            });
-            return Object.assign({}, result, {
-              providerId: candidateProviderId,
-            });
-          } catch (error) {
-            noteProviderRequestResult(candidateProviderId, error);
-            lastError = error;
-            console.warn(
-              "[modular-web-translator]",
-              `tx#${debugId} provider failed`,
-              candidateProviderId,
-              formatError(error)
-            );
-
-            if (isVirtualProviderId(providerId)) {
-              if (!isProviderLimitError(error)) {
-                blockProviderTemporarily(candidateProviderId, 60000);
-              }
-              continue;
-            }
-
-            if (!isProviderLimitError(error)) {
-              throw error;
-            }
-          }
-        }
-
-        console.error(
-          "[modular-web-translator]",
-          `tx#${debugId} all providers failed`,
-          formatError(lastError || "All providers failed.")
-        );
-        throw lastError || new Error("All providers failed.");
-      })
+      const task = queueTranslationRequest(
+        text,
+        settingsSnapshot,
+        requestOptions,
+        debugId
+      )
         .catch((error) => {
           state.translationCache.delete(cacheKey);
           throw error;

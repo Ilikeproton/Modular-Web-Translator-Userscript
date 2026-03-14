@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "version": "1.9.0",
+  "version": "1.9.1",
   "cacheTtlMinutes": 30,
   "moduleCacheTtlMinutes": 30,
   "providers": [
     {
       "id": "google-web",
       "label": "Google Web",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/providers/google-web.provider.js",
       "minRuntimeVersion": "1.0.0",
       "isDefault": true,
@@ -27,7 +27,7 @@
     {
       "id": "google-fr-web",
       "label": "Google FR Web",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/providers/google-fr-web.provider.js",
       "minRuntimeVersion": "1.5.0",
       "languageMap": {
@@ -46,7 +46,7 @@
     {
       "id": "google-de-web",
       "label": "Google DE Web",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/providers/google-de-web.provider.js",
       "minRuntimeVersion": "1.5.0",
       "languageMap": {

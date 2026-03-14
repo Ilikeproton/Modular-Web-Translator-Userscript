@@ -35,7 +35,7 @@
     "[thingid^='t1_']",
   ];
 
-const COMMENT_BODY_SELECTORS = [
+  const COMMENT_BODY_SELECTORS = [
     ":scope > [slot='comment']",
     ":scope > [id$='-comment-rtjson-content']",
     ":scope > div.md[slot='comment']",
@@ -375,12 +375,14 @@ const COMMENT_BODY_SELECTORS = [
       const jobs = [];
 
       if (extracted.title && titleSection) {
-        jobs.push(
-          runtime
-            .translateText(extracted.title)
-            .then((result) => {
-              if (context.runId !== runId) {
-                return;
+          jobs.push(
+            runtime
+              .translateText(extracted.title, {
+                sourceElement: extracted.titleElement,
+              })
+              .then((result) => {
+                if (context.runId !== runId) {
+                  return;
               }
 
               runtime.ui.setSectionSuccess(
@@ -403,12 +405,14 @@ const COMMENT_BODY_SELECTORS = [
       }
 
       if (extracted.body && bodySection) {
-        jobs.push(
-          runtime
-            .translateText(extracted.body)
-            .then((result) => {
-              if (context.runId !== runId) {
-                return;
+          jobs.push(
+            runtime
+              .translateText(extracted.body, {
+                sourceElement: extracted.bodyElement,
+              })
+              .then((result) => {
+                if (context.runId !== runId) {
+                  return;
               }
 
               runtime.ui.setSectionSuccess(

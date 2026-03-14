@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "cacheTtlMinutes": 30,
   "moduleCacheTtlMinutes": 30,
   "modules": [
@@ -65,7 +65,7 @@
     {
       "id": "reddit-post-detail",
       "name": "Reddit Post Detail",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/modules/reddit-post-detail.module.js",
       "minRuntimeVersion": "1.1.0",
       "matchRules": [
