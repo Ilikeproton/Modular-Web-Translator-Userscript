@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.9.1
+// @version      1.9.2
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.9.1";
+  const SCRIPT_VERSION = "1.9.2";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
@@ -3334,6 +3334,7 @@
           getNodes: getPostDetailNodes,
           extract: extractPostDetailItem,
           getAnchor: getPostDetailAnchor,
+          prefetchDistancePx: Number.POSITIVE_INFINITY,
           uiDetails: {
             title: "Modular Web Translator",
             moduleName: "Reddit Post Detail",
