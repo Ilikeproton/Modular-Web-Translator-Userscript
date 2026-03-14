@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.8.0
+// @version      1.8.1
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.8.0";
+  const SCRIPT_VERSION = "1.8.1";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
@@ -303,7 +303,7 @@
   function getDefaultProviderManifest() {
     return normalizeProviderManifest({
       schemaVersion: 1,
-      version: "1.8.0",
+      version: "1.8.1",
       cacheTtlMinutes: 30,
       moduleCacheTtlMinutes: 30,
       providers: [
@@ -3126,6 +3126,29 @@
     );
   }
 
+  let remoteCodeExecutionCheck = null;
+
+  function getRemoteCodeExecutionCheck() {
+    if (remoteCodeExecutionCheck) {
+      return remoteCodeExecutionCheck;
+    }
+
+    try {
+      const evaluator = new Function("return true;");
+      remoteCodeExecutionCheck = {
+        supported: Boolean(evaluator()),
+        error: null,
+      };
+    } catch (error) {
+      remoteCodeExecutionCheck = {
+        supported: false,
+        error,
+      };
+    }
+
+    return remoteCodeExecutionCheck;
+  }
+
   async function loadRemoteProvider(entry, manifest) {
     const code = await loadProviderSource(entry, manifest);
     const executor = new Function(
@@ -3161,6 +3184,13 @@
       );
     }
 
+    const remoteCodeCheck = getRemoteCodeExecutionCheck();
+    const fallbackProvider = builtInProviders.get(providerId);
+    if (!remoteCodeCheck.supported && fallbackProvider) {
+      state.providerRegistry.set(providerId, fallbackProvider);
+      return fallbackProvider;
+    }
+
     const task = loadRemoteProvider(entry, state.providerManifest).finally(() => {
       state.providerLoadTasks.delete(providerId);
     });
@@ -3168,7 +3198,6 @@
     try {
       return await task;
     } catch (error) {
-      const fallbackProvider = builtInProviders.get(providerId);
       if (fallbackProvider) {
         console.warn(
           `[modular-web-translator] remote provider ${providerId} blocked, falling back to built-in provider`,
@@ -3773,6 +3802,7 @@
 
     ensureStyles();
     const runtime = createRuntime();
+    const remoteCodeCheck = getRemoteCodeExecutionCheck();
 
     for (const entry of matchedModules) {
       if (compareVersions(SCRIPT_VERSION, entry.minRuntimeVersion) < 0) {
@@ -3782,12 +3812,17 @@
         continue;
       }
 
+      const fallbackModule = builtInSiteModules.get(entry.id);
+      if (!remoteCodeCheck.supported && fallbackModule) {
+        await Promise.resolve(fallbackModule.mount(runtime, entry));
+        continue;
+      }
+
       try {
         const moduleDefinition = await loadRemoteModule(entry, manifest);
         await Promise.resolve(moduleDefinition.mount(runtime, entry));
         log("Mounted remote module", entry.id, entry.version);
       } catch (error) {
-        const fallbackModule = builtInSiteModules.get(entry.id);
         if (fallbackModule) {
           console.warn(
             `[modular-web-translator] remote module ${entry.id} blocked, falling back to built-in module`,
