@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.8.4
+// @version      1.8.6
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.8.4";
+  const SCRIPT_VERSION = "1.8.6";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
@@ -233,14 +233,21 @@
       }
 
       .mwt-settings-toggle {
-        border: 1px solid rgba(15, 23, 42, 0.12);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 112px;
+        min-height: 40px;
+        border: 1px solid rgba(30, 64, 175, 0.35);
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.94);
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
-        color: #111827;
-        padding: 10px 14px;
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+        box-shadow: 0 14px 32px rgba(37, 99, 235, 0.35);
+        color: #ffffff;
+        padding: 10px 18px;
         font-size: 13px;
-        font-weight: 600;
+        font-weight: 700;
+        line-height: 1;
+        text-align: center;
         cursor: pointer;
       }
 
@@ -318,7 +325,7 @@
   function getDefaultProviderManifest() {
     return normalizeProviderManifest({
       schemaVersion: 1,
-      version: "1.8.3",
+      version: "1.8.6",
       cacheTtlMinutes: 30,
       moduleCacheTtlMinutes: 30,
       providers: [
@@ -2402,6 +2409,7 @@
           const runId = context.runId + 1;
           context.runId = runId;
           context.pendingSignature = signature;
+          let hadFailure = false;
 
           if (extracted.title && titleSection) {
             runtime.ui.setSectionLoading(titleSection, getMetaText("Title", runtime));
@@ -2414,57 +2422,75 @@
 
           if (extracted.title && titleSection) {
             jobs.push(
-              runtime.translateText(extracted.title).then((result) => {
-                if (context.runId !== runId) {
-                  return;
-                }
-                runtime.ui.setSectionSuccess(
-                  titleSection,
-                  getMetaText("Title", runtime, result.providerId),
-                  result.text
-                );
-              })
+              runtime
+                .translateText(extracted.title)
+                .then((result) => {
+                  if (context.runId !== runId) {
+                    return;
+                  }
+                  runtime.ui.setSectionSuccess(
+                    titleSection,
+                    getMetaText("Title", runtime, result.providerId),
+                    result.text
+                  );
+                })
+                .catch((error) => {
+                  if (context.runId !== runId) {
+                    return;
+                  }
+                  hadFailure = true;
+                  if (titleSection.root.dataset.state !== "ready") {
+                    runtime.ui.setSectionError(
+                      titleSection,
+                      getMetaText("Title", runtime),
+                      error
+                    );
+                  }
+                })
             );
           }
 
           if (extracted.body && bodySection) {
             jobs.push(
-              runtime.translateText(extracted.body).then((result) => {
-                if (context.runId !== runId) {
-                  return;
-                }
-                runtime.ui.setSectionSuccess(
-                  bodySection,
-                  getMetaText("Body", runtime, result.providerId),
-                  result.text
-                );
-              })
+              runtime
+                .translateText(extracted.body)
+                .then((result) => {
+                  if (context.runId !== runId) {
+                    return;
+                  }
+                  runtime.ui.setSectionSuccess(
+                    bodySection,
+                    getMetaText("Body", runtime, result.providerId),
+                    result.text
+                  );
+                })
+                .catch((error) => {
+                  if (context.runId !== runId) {
+                    return;
+                  }
+                  hadFailure = true;
+                  if (bodySection.root.dataset.state !== "ready") {
+                    runtime.ui.setSectionError(
+                      bodySection,
+                      getMetaText("Body", runtime),
+                      error
+                    );
+                  }
+                })
             );
           }
 
-          Promise.all(jobs)
+          Promise.allSettled(jobs)
             .then(() => {
               if (context.runId !== runId) {
                 return;
               }
               context.pendingSignature = "";
-              context.renderSignature = signature;
-            })
-            .catch((error) => {
-              if (context.runId !== runId) {
+              if (hadFailure) {
                 return;
               }
-              context.pendingSignature = "";
-              if (extracted.title && titleSection) {
-                runtime.ui.setSectionError(
-                  titleSection,
-                  getMetaText("Title", runtime),
-                  error
-                );
-              }
-              if (extracted.body && bodySection) {
-                runtime.ui.setSectionError(bodySection, getMetaText("Body", runtime), error);
-              }
+
+              context.renderSignature = signature;
             });
         }
 
@@ -2706,63 +2732,78 @@
         const runId = context.runId + 1;
         context.runId = runId;
         context.pendingSignature = signature;
+        let hadFailure = false;
         const jobs = [];
 
         if (extracted.title && titleSection) {
           runtime.ui.setSectionLoading(titleSection, getMetaText("Title", runtime));
           jobs.push(
-            runtime.translateText(extracted.title).then((result) => {
-              if (context.runId !== runId) {
-                return;
-              }
-              runtime.ui.setSectionSuccess(
-                titleSection,
-                getMetaText("Title", runtime, result.providerId),
-                result.text
-              );
-            })
+            runtime
+              .translateText(extracted.title)
+              .then((result) => {
+                if (context.runId !== runId) {
+                  return;
+                }
+                runtime.ui.setSectionSuccess(
+                  titleSection,
+                  getMetaText("Title", runtime, result.providerId),
+                  result.text
+                );
+              })
+              .catch((error) => {
+                if (context.runId !== runId) {
+                  return;
+                }
+                hadFailure = true;
+                if (titleSection.root.dataset.state !== "ready") {
+                  runtime.ui.setSectionError(titleSection, getMetaText("Title", runtime), error);
+                }
+              })
           );
         }
 
         if (extracted.body && bodySection) {
           runtime.ui.setSectionLoading(bodySection, getMetaText("Body", runtime));
           jobs.push(
-            runtime.translateText(extracted.body).then((result) => {
-              if (context.runId !== runId) {
-                return;
-              }
-              runtime.ui.setSectionSuccess(
-                bodySection,
-                getMetaText("Body", runtime, result.providerId),
-                result.text
-              );
-            })
+            runtime
+              .translateText(extracted.body)
+              .then((result) => {
+                if (context.runId !== runId) {
+                  return;
+                }
+                runtime.ui.setSectionSuccess(
+                  bodySection,
+                  getMetaText("Body", runtime, result.providerId),
+                  result.text
+                );
+              })
+              .catch((error) => {
+                if (context.runId !== runId) {
+                  return;
+                }
+                hadFailure = true;
+                if (bodySection.root.dataset.state !== "ready") {
+                  runtime.ui.setSectionError(bodySection, getMetaText("Body", runtime), error);
+                }
+              })
           );
         }
 
-        Promise.all(jobs)
+        Promise.allSettled(jobs)
           .then(() => {
             if (context.runId !== runId) {
               return;
             }
             context.pendingSignature = "";
+            if (hadFailure) {
+              context.failedSignature = signature;
+              context.retryNotBefore = Date.now() + TRANSLATION_RETRY_COOLDOWN_MS;
+              return;
+            }
+
             context.renderSignature = signature;
             context.failedSignature = "";
             context.retryNotBefore = 0;
-          })
-          .catch((error) => {
-            if (context.runId !== runId) {
-              return;
-            }
-            context.pendingSignature = "";
-            context.failedSignature = signature;
-            context.retryNotBefore = Date.now() + TRANSLATION_RETRY_COOLDOWN_MS;
-            if (titleSection) {
-              runtime.ui.setSectionError(titleSection, getMetaText("Title", runtime), error);
-            }
-            if (bodySection) {
-              runtime.ui.setSectionError(bodySection, getMetaText("Body", runtime), error);
-            }
           });
       }
 

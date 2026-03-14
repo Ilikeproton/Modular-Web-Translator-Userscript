@@ -265,6 +265,7 @@
       const runId = context.runId + 1;
       context.runId = runId;
       context.pendingSignature = signature;
+      let hadFailure = false;
 
       if (extracted.title && titleSection) {
         runtime.ui.setSectionLoading(titleSection, getMetaText("Title", runtime));
@@ -278,65 +279,84 @@
 
       if (extracted.title && titleSection) {
         jobs.push(
-          runtime.translateText(extracted.title).then((result) => {
-            if (context.runId !== runId) {
-              return;
-            }
+          runtime
+            .translateText(extracted.title)
+            .then((result) => {
+              if (context.runId !== runId) {
+                return;
+              }
 
-            runtime.ui.setSectionSuccess(
-              titleSection,
-              getMetaText("Title", runtime, result.providerId),
-              result.text
-            );
-          })
+              runtime.ui.setSectionSuccess(
+                titleSection,
+                getMetaText("Title", runtime, result.providerId),
+                result.text
+              );
+            })
+            .catch((error) => {
+              if (context.runId !== runId) {
+                return;
+              }
+
+              hadFailure = true;
+              if (titleSection.root.dataset.state !== "ready") {
+                runtime.ui.setSectionError(
+                  titleSection,
+                  getMetaText("Title", runtime),
+                  error
+                );
+              }
+            })
         );
       }
 
       if (extracted.body && bodySection) {
         jobs.push(
-          runtime.translateText(extracted.body).then((result) => {
-            if (context.runId !== runId) {
-              return;
-            }
+          runtime
+            .translateText(extracted.body)
+            .then((result) => {
+              if (context.runId !== runId) {
+                return;
+              }
 
-            runtime.ui.setSectionSuccess(
-              bodySection,
-              getMetaText("Body", runtime, result.providerId),
-              result.text
-            );
-          })
+              runtime.ui.setSectionSuccess(
+                bodySection,
+                getMetaText("Body", runtime, result.providerId),
+                result.text
+              );
+            })
+            .catch((error) => {
+              if (context.runId !== runId) {
+                return;
+              }
+
+              hadFailure = true;
+              if (bodySection.root.dataset.state !== "ready") {
+                runtime.ui.setSectionError(
+                  bodySection,
+                  getMetaText("Body", runtime),
+                  error
+                );
+              }
+            })
         );
       }
 
-      Promise.all(jobs)
+      Promise.allSettled(jobs)
         .then(() => {
           if (context.runId !== runId) {
             return;
           }
 
           context.pendingSignature = "";
-          context.renderSignature = signature;
-          context.failedSignature = "";
-          context.retryNotBefore = 0;
-        })
-        .catch((error) => {
-          if (context.runId !== runId) {
+          if (hadFailure) {
+            context.failedSignature = signature;
+            context.retryNotBefore = Date.now() + TRANSLATION_RETRY_COOLDOWN_MS;
             return;
           }
 
-          context.pendingSignature = "";
-          context.failedSignature = signature;
-          context.retryNotBefore = Date.now() + TRANSLATION_RETRY_COOLDOWN_MS;
-          if (extracted.title && titleSection) {
-            runtime.ui.setSectionError(
-              titleSection,
-              getMetaText("Title", runtime),
-              error
-            );
-          }
-          if (extracted.body && bodySection) {
-            runtime.ui.setSectionError(bodySection, getMetaText("Body", runtime), error);
-          }
+          context.renderSignature = signature;
+          context.failedSignature = "";
+          context.retryNotBefore = 0;
         });
     }
 
