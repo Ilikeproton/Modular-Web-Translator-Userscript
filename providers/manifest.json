@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "1.8.1",
+  "version": "1.8.4",
   "cacheTtlMinutes": 30,
   "moduleCacheTtlMinutes": 30,
   "providers": [

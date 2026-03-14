@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.8.1
+// @version      1.8.4
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.8.1";
+  const SCRIPT_VERSION = "1.8.4";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
@@ -86,7 +86,8 @@
   };
 
   const CONFIG = {
-    debug: false,
+    debug: true,
+    textPreviewLength: 96,
   };
 
   const LANGUAGE_OPTIONS = [
@@ -155,6 +156,7 @@
       moduleName: "",
       description: "",
     },
+    translationDebugCounter: 0,
     uiNotice: "",
     outsideClickHandler: null,
     moduleRegistry: new Map(),
@@ -172,6 +174,19 @@
     }
 
     console.log("[modular-web-translator]", ...args);
+  }
+
+  function previewText(text) {
+    const normalized = normalizeInlineText(String(text || ""));
+    if (!normalized) {
+      return "";
+    }
+
+    if (normalized.length <= CONFIG.textPreviewLength) {
+      return normalized;
+    }
+
+    return `${normalized.slice(0, CONFIG.textPreviewLength - 3)}...`;
   }
 
   function ensureStyles() {
@@ -303,7 +318,7 @@
   function getDefaultProviderManifest() {
     return normalizeProviderManifest({
       schemaVersion: 1,
-      version: "1.8.1",
+      version: "1.8.3",
       cacheTtlMinutes: 30,
       moduleCacheTtlMinutes: 30,
       providers: [
@@ -2313,6 +2328,7 @@
         let scanTimer = null;
         let observer = null;
         let unsubscribe = null;
+        let lastSettings = runtime.getSettings();
 
         function cleanupDetachedContexts() {
           for (const context of Array.from(contexts)) {
@@ -2357,7 +2373,6 @@
         function getContextTranslationSignature(context) {
           const settings = runtime.getSettings();
           return JSON.stringify({
-            provider: settings.provider,
             targetLanguage: settings.targetLanguage,
             title: context.extracted.title,
             body: context.extracted.body,
@@ -2453,9 +2468,17 @@
             });
         }
 
-        function refreshAllContexts() {
+        function refreshAllContexts(reason) {
           cleanupDetachedContexts();
           for (const context of contexts) {
+            if (reason === "provider") {
+              if (!context.renderSignature) {
+                context.pendingSignature = "";
+                translateContext(context);
+              }
+              continue;
+            }
+
             context.renderSignature = "";
             context.pendingSignature = "";
             translateContext(context);
@@ -2504,8 +2527,11 @@
           subtree: true,
         });
 
-        unsubscribe = runtime.onSettingsChanged(() => {
-          refreshAllContexts();
+        unsubscribe = runtime.onSettingsChanged((nextSettings) => {
+          const reason =
+            nextSettings.targetLanguage !== lastSettings.targetLanguage ? "language" : "provider";
+          lastSettings = nextSettings;
+          refreshAllContexts(reason);
         });
 
         return () => {
@@ -2609,6 +2635,7 @@
       let scanTimer = null;
       let observer = null;
       let unsubscribe = null;
+      let lastSettings = runtime.getSettings();
 
       function cleanupDetachedContexts() {
         for (const context of Array.from(contexts)) {
@@ -2649,7 +2676,6 @@
       function getSignature(context) {
         const settings = runtime.getSettings();
         return JSON.stringify({
-          provider: settings.provider,
           targetLanguage: settings.targetLanguage,
           title: context.extracted.title,
           body: context.extracted.body,
@@ -2740,9 +2766,19 @@
           });
       }
 
-      function refreshAllContexts() {
+      function refreshAllContexts(reason) {
         cleanupDetachedContexts();
         for (const context of contexts) {
+          if (reason === "provider") {
+            if (!context.renderSignature || context.failedSignature) {
+              context.pendingSignature = "";
+              context.failedSignature = "";
+              context.retryNotBefore = 0;
+              translateContext(context);
+            }
+            continue;
+          }
+
           context.renderSignature = "";
           context.pendingSignature = "";
           context.failedSignature = "";
@@ -2788,8 +2824,11 @@
         subtree: true,
       });
 
-      unsubscribe = runtime.onSettingsChanged(() => {
-        refreshAllContexts();
+      unsubscribe = runtime.onSettingsChanged((nextSettings) => {
+        const reason =
+          nextSettings.targetLanguage !== lastSettings.targetLanguage ? "language" : "provider";
+        lastSettings = nextSettings;
+        refreshAllContexts(reason);
       });
 
       return () => {
@@ -3290,6 +3329,17 @@
     );
   }
 
+  function blockProviderTemporarily(providerId, minimumBackoffMs) {
+    const providerState = getProviderRequestState(providerId);
+    const policy = getProviderRequestPolicy(providerId);
+    const backoffMs = Math.max(Number(minimumBackoffMs) || 0, policy.failureBackoffMs);
+
+    providerState.blockedUntil = Math.max(
+      providerState.blockedUntil,
+      Date.now() + backoffMs
+    );
+  }
+
   function getAutoBalancedProviderOrder(targetLanguage) {
     const now = Date.now();
 
@@ -3366,6 +3416,7 @@
   function translateText(text) {
     const settingsSnapshot = Object.assign({}, state.settings);
     const providerId = settingsSnapshot.provider;
+    const debugId = ++state.translationDebugCounter;
 
     const cacheKey = JSON.stringify({
       provider: providerId,
@@ -3382,12 +3433,21 @@
         );
         let lastError = null;
 
+        log(`tx#${debugId} start`, {
+          provider: providerId,
+          targetLanguage: settingsSnapshot.targetLanguage,
+          sourceLanguage: settingsSnapshot.sourceLanguage,
+          text: previewText(text),
+        });
+        log(`tx#${debugId} provider order`, providerAttemptOrder);
+
         for (const candidateProviderId of providerAttemptOrder) {
           const candidateSettings = Object.assign({}, settingsSnapshot, {
             provider: candidateProviderId,
           });
 
           try {
+            log(`tx#${debugId} trying provider`, candidateProviderId);
             const provider = await ensureProviderLoaded(candidateProviderId);
             await waitForProviderRequestWindow(candidateProviderId);
             const result = await provider.translateText(
@@ -3404,12 +3464,30 @@
               promoteProviderChoice(candidateProviderId, formatError(lastError || "rate limit"));
             }
 
+            log(`tx#${debugId} success`, {
+              provider: candidateProviderId,
+              detectedSourceLanguage: result.detectedSourceLanguage || candidateSettings.sourceLanguage,
+              text: previewText(result.text),
+            });
             return Object.assign({}, result, {
               providerId: candidateProviderId,
             });
           } catch (error) {
             noteProviderRequestResult(candidateProviderId, error);
             lastError = error;
+            console.warn(
+              "[modular-web-translator]",
+              `tx#${debugId} provider failed`,
+              candidateProviderId,
+              formatError(error)
+            );
+
+            if (isVirtualProviderId(providerId)) {
+              if (!isProviderLimitError(error)) {
+                blockProviderTemporarily(candidateProviderId, 60000);
+              }
+              continue;
+            }
 
             if (!isProviderLimitError(error)) {
               throw error;
@@ -3417,6 +3495,11 @@
           }
         }
 
+        console.error(
+          "[modular-web-translator]",
+          `tx#${debugId} all providers failed`,
+          formatError(lastError || "All providers failed.")
+        );
         throw lastError || new Error("All providers failed.");
       })
         .catch((error) => {
@@ -3762,8 +3845,16 @@
     await waitForDocumentBody();
     ensureGlobalRegistry();
     registerBuiltInFallbacks();
+    log("boot start", {
+      version: SCRIPT_VERSION,
+      href: location.href,
+    });
 
     await ensureProviderCatalogLoaded();
+    log(
+      "provider catalog ready",
+      getConcreteProviderCatalogEntries().map((provider) => provider.id)
+    );
     const normalizedSettings = normalizeSettings(state.settings);
     const settingsChanged =
       JSON.stringify(normalizedSettings) !== JSON.stringify(state.settings);
@@ -3793,6 +3884,10 @@
     }
 
     const matchedModules = manifest.modules.filter((entry) => moduleMatchesUrl(entry, window.location));
+    log(
+      "matched modules",
+      matchedModules.map((entry) => entry.id)
+    );
     if (matchedModules.length === 0) {
       log("No remote site module matched current page.", location.href);
       ensureStyles();

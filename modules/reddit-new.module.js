@@ -161,6 +161,7 @@
     let scanTimer = null;
     let observer = null;
     let unsubscribe = null;
+    let lastSettings = runtime.getSettings();
 
     function cleanupDetachedContexts() {
       for (const context of Array.from(contexts)) {
@@ -205,7 +206,6 @@
     function getContextTranslationSignature(context) {
       const settings = runtime.getSettings();
       return JSON.stringify({
-        provider: settings.provider,
         targetLanguage: settings.targetLanguage,
         title: context.extracted.title,
         body: context.extracted.body,
@@ -313,9 +313,19 @@
         });
     }
 
-    function refreshAllContexts() {
+    function refreshAllContexts(reason) {
       cleanupDetachedContexts();
       for (const context of contexts) {
+        if (reason === "provider") {
+          if (!context.renderSignature || context.failedSignature) {
+            context.pendingSignature = "";
+            context.failedSignature = "";
+            context.retryNotBefore = 0;
+            translateContext(context);
+          }
+          continue;
+        }
+
         context.renderSignature = "";
         context.pendingSignature = "";
         context.failedSignature = "";
@@ -369,8 +379,11 @@
         subtree: true,
       });
 
-      unsubscribe = runtime.onSettingsChanged(() => {
-        refreshAllContexts();
+      unsubscribe = runtime.onSettingsChanged((nextSettings) => {
+        const reason =
+          nextSettings.targetLanguage !== lastSettings.targetLanguage ? "language" : "provider";
+        lastSettings = nextSettings;
+        refreshAllContexts(reason);
       });
     }
 
