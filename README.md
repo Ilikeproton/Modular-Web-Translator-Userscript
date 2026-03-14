@@ -34,12 +34,15 @@ Current production support covers these Reddit page types:
 - `https://www.reddit.com/r/popular/`
 - `https://www.reddit.com/r/<subreddit>/`
 - `https://www.reddit.com/r/<subreddit>/(hot|new|top|rising|controversial)`
+- `https://www.reddit.com/r/<subreddit>/comments/<postId>/...`
+- `https://www.reddit.com/comments/<postId>/...`
 - `https://www.reddit.com/explore/*`
 
 Current behavior:
 
 - translate Reddit post titles inline
 - translate Reddit post text bodies inline
+- translate Reddit post-detail titles, bodies, and comment threads inline
 - translate Reddit Explore community cards and descriptions
 - react to dynamically loaded content
 - let users switch provider and target language from the on-page settings panel
@@ -110,6 +113,7 @@ The current Reddit support is the first implementation, not the final scope of t
 |   |-- manifest.json
 |   |-- reddit-explore.module.js
 |   |-- reddit-feed.module.js
+|   |-- reddit-post-detail.module.js
 |   `-- reddit-new.module.js
 |-- providers/
 |   |-- bing-web.provider.js
@@ -134,6 +138,7 @@ The current Reddit support is the first implementation, not the final scope of t
 - Auto-update metadata: [modular-web-translator-userscript.meta.js](./modular-web-translator-userscript.meta.js)
 - Site module registry: [modules/manifest.json](./modules/manifest.json)
 - Reddit feed module: [modules/reddit-feed.module.js](./modules/reddit-feed.module.js)
+- Reddit post-detail module: [modules/reddit-post-detail.module.js](./modules/reddit-post-detail.module.js)
 - Reddit explore module: [modules/reddit-explore.module.js](./modules/reddit-explore.module.js)
 - Provider registry: [providers/manifest.json](./providers/manifest.json)
 - Google provider file: [providers/google-web.provider.js](./providers/google-web.provider.js)

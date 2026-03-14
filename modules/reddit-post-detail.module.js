@@ -3,178 +3,198 @@
 
   const TRANSLATION_RETRY_COOLDOWN_MS = 15000;
 
-  const DIRECT_EXPLORE_SELECTORS = [
-    "in-feed-community-recommendations",
-    "community-recommendation",
-  ].join(", ");
+  const POST_ROOT_SELECTORS = [
+    "shreddit-post[view-context='CommentsPage']",
+    "shreddit-post[permalink*='/comments/'][post-title]",
+    "shreddit-post[content-href*='/comments/'][post-title]",
+  ];
 
-  const FALLBACK_CARD_CONTAINER_SELECTOR = [
-    "[data-testid='community-card']",
-    "faceplate-card",
-    "article",
-    "section",
-    "li",
-    "div[data-testid]",
-    "div[class*='card']",
-    "div[class*='Card']",
-  ].join(", ");
-
-  const TOPIC_TITLE_SELECTORS = ["h3[slot='title']", "[slot='title']", "h2", "h3"];
-  const CARD_TITLE_SELECTORS = [
-    "h4",
-    "h3",
-    "[data-testid='card-title']",
+  const POST_TITLE_SELECTORS = [
+    "h1",
+    "a[id^='post-title-']",
     "[slot='title']",
-    "a[href^='/r/']",
-  ];
-  const CARD_BODY_SELECTORS = [
-    "p.line-clamp-2",
-    "[data-testid='description']",
-    "[slot='description']",
-    "p",
-    "span",
+    "a[data-testid='post-title']",
+    "h2",
+    "h3",
+    "faceplate-screen-reader-content",
   ];
 
-  function isRedditExplorePage(url) {
-    return url.hostname === "www.reddit.com" && url.pathname.startsWith("/explore");
+  const POST_BODY_SELECTORS = [
+    "shreddit-post-text-body",
+    "[slot='text-body']",
+    "[data-post-click-location='text-body']",
+    "div[data-click-id='text']",
+    "div.md",
+    "[data-testid='post-content']",
+  ];
+
+  const COMMENT_ROOT_SELECTORS = [
+    "shreddit-comment[thingid]",
+    "shreddit-comment",
+    "[data-testid='comment']",
+    "[thingid^='t1_']",
+  ];
+
+const COMMENT_BODY_SELECTORS = [
+    ":scope > [slot='comment']",
+    ":scope > [id$='-comment-rtjson-content']",
+    ":scope > div.md[slot='comment']",
+    ":scope > div.md",
+    "[slot='comment']",
+    "[id$='-comment-rtjson-content']",
+    "div.md[slot='comment']",
+  ];
+
+  function normalizePathname(pathname) {
+    const normalized = String(pathname || "/").trim() || "/";
+    if (normalized === "/") {
+      return normalized;
+    }
+    return normalized.replace(/\/+$/, "");
   }
 
-  function isTopicSectionNode(node) {
-    return node.matches("in-feed-community-recommendations");
+  function stripCommentLeaf(pathname) {
+    return normalizePathname(pathname).replace(/\/comment\/[^/]+$/i, "");
   }
 
-  function isCommunityCardNode(node) {
-    return node.matches("community-recommendation");
+  function isSameCommentThread(candidatePathname, currentPathname) {
+    return stripCommentLeaf(candidatePathname) === stripCommentLeaf(currentPathname);
   }
 
-  function isExploreNodeCandidate(node) {
-    if (!(node instanceof HTMLElement)) {
-      return false;
-    }
-    if (node.closest("header, nav")) {
-      return false;
-    }
-    if (node.querySelector("shreddit-post, [data-testid='post-container']")) {
-      return false;
-    }
-    if (isTopicSectionNode(node)) {
-      return Boolean(node.querySelector("h3[slot='title'], [slot='title'], h2, h3"));
-    }
-    return Boolean(node.querySelector("a[href^='/r/'], h4, h3, [data-testid='card-title']"));
-  }
-
-  function getExploreNodes(root, runtime) {
-    const directNodes = runtime.utils.uniqueNodes(
-      Array.from(root.querySelectorAll(DIRECT_EXPLORE_SELECTORS))
-    ).filter(isExploreNodeCandidate);
-
-    if (directNodes.length > 0) {
-      return directNodes;
-    }
-
-    const communityLinks = Array.from(root.querySelectorAll("a[href^='/r/']"));
-    const fallbackCards = communityLinks
-      .map(
-        (link) =>
-          link.closest(FALLBACK_CARD_CONTAINER_SELECTOR) ||
-          link.closest("article, section, li") ||
-          link.parentElement
-      )
-      .filter(Boolean);
-
-    return runtime.utils.uniqueNodes(fallbackCards).filter(isExploreNodeCandidate);
-  }
-
-  function pickFirstMeaningful(root, selectors, normalizer, minLength, predicate) {
-    for (const selector of selectors) {
-      const candidates = root.querySelectorAll(selector);
-      for (const element of candidates) {
-        const text = normalizer(element.textContent);
-        if (!text || text.length < minLength) {
-          continue;
-        }
-        if (predicate && !predicate(text, element)) {
-          continue;
-        }
-        return {
-          text,
-          element,
-        };
-      }
-    }
-    return null;
-  }
-
-  function isMeaningfulExploreBody(text, element) {
-    if (element.querySelector("faceplate-number")) {
+  function isRedditPostDetailPage(url) {
+    if (url.hostname !== "www.reddit.com") {
       return false;
     }
 
-    const normalized = text.toLowerCase();
+    return /^\/(?:r\/[^/]+\/)?comments\/[^/]+(?:\/[^/]+){0,2}\/?$/.test(url.pathname || "/");
+  }
+
+  function resolveUrl(value) {
+    if (!value) {
+      return "";
+    }
+
+    try {
+      return new URL(value, location.origin).toString();
+    } catch (error) {
+      return String(value);
+    }
+  }
+
+  function getPostUrl(postNode) {
     return (
-      !normalized.includes("weekly visitors") &&
-      !normalized.includes("monthly visitors") &&
-      !normalized.includes("members online")
+      resolveUrl(postNode.getAttribute("permalink")) ||
+      resolveUrl(postNode.getAttribute("content-href")) ||
+      resolveUrl(
+        postNode.querySelector("a[href*='/comments/']")?.getAttribute("href")
+      ) ||
+      ""
     );
   }
 
-  function extractExploreTopic(sectionNode, runtime) {
-    const titleNode = pickFirstMeaningful(
-      sectionNode,
-      TOPIC_TITLE_SELECTORS,
-      runtime.utils.normalizeInlineText,
-      2
+  function getCommentUrl(commentNode) {
+    return (
+      resolveUrl(commentNode.getAttribute("permalink")) ||
+      resolveUrl(commentNode.querySelector("a[href*='/comment/']")?.getAttribute("href")) ||
+      ""
     );
+  }
 
-    if (!titleNode) {
-      return null;
+  function scorePostNode(postNode) {
+    const currentPath = normalizePathname(location.pathname);
+    const postUrl = getPostUrl(postNode);
+    const postPath = postUrl ? normalizePathname(new URL(postUrl, location.origin).pathname) : "";
+    let score = 0;
+
+    if (postNode.hasAttribute("data-expected-lcp")) {
+      score += 4;
+    }
+    if (postNode.getAttribute("view-context") === "CommentsPage") {
+      score += 3;
+    }
+    if (postPath && isSameCommentThread(postPath, currentPath)) {
+      score += 8;
     }
 
-    return {
-      id:
-        sectionNode.getAttribute("id") ||
-        sectionNode.dataset.testid ||
-        `topic:${titleNode.text}`,
-      title: titleNode.text,
-      body: "",
-      titleElement: titleNode.element,
-      bodyElement: null,
-    };
+    return score;
   }
 
-  function extractExploreCard(cardNode, runtime) {
-    const titleNode = pickFirstMeaningful(
-      cardNode,
-      CARD_TITLE_SELECTORS,
-      runtime.utils.normalizeInlineText,
-      2
+  function getPrimaryPostNodes(root, runtime) {
+    const postNodes = runtime.utils.uniqueNodes(
+      POST_ROOT_SELECTORS.flatMap((selector) => Array.from(root.querySelectorAll(selector)))
     );
 
-    const bodyNode = pickFirstMeaningful(
-      cardNode,
-      CARD_BODY_SELECTORS,
-      runtime.utils.normalizeInlineText,
-      20,
-      isMeaningfulExploreBody
+    if (postNodes.length === 0) {
+      return [];
+    }
+
+    return postNodes
+      .slice()
+      .sort((left, right) => scorePostNode(right) - scorePostNode(left))
+      .slice(0, 1);
+  }
+
+  function getCommentNodes(root, runtime) {
+    const nodes = runtime.utils.uniqueNodes(
+      COMMENT_ROOT_SELECTORS.flatMap((selector) => Array.from(root.querySelectorAll(selector)))
+    );
+
+    return nodes.filter((node) => {
+      if (!(node instanceof HTMLElement)) {
+        return false;
+      }
+      return Boolean(
+        runtime.utils.getFirstText(
+          node,
+          COMMENT_BODY_SELECTORS,
+          runtime.utils.normalizeMultilineText
+        )
+      );
+    });
+  }
+
+  function getPostDetailNodes(root, runtime) {
+    return runtime.utils.uniqueNodes([
+      ...getPrimaryPostNodes(root, runtime),
+      ...getCommentNodes(root, runtime),
+    ]);
+  }
+
+  function extractPost(postNode, runtime) {
+    const titleFromAttribute = runtime.utils.normalizeInlineText(
+      postNode.getAttribute("post-title")
+    );
+    const titleNode =
+      titleFromAttribute
+        ? {
+            text: titleFromAttribute,
+            element:
+              postNode.querySelector("h1") ||
+              postNode.querySelector("a[id^='post-title-']") ||
+              postNode.querySelector("[slot='title']") ||
+              postNode.querySelector("a[data-testid='post-title']") ||
+              postNode,
+          }
+        : runtime.utils.getFirstText(postNode, POST_TITLE_SELECTORS, runtime.utils.normalizeInlineText);
+
+    const bodyNode = runtime.utils.getFirstText(
+      postNode,
+      POST_BODY_SELECTORS,
+      runtime.utils.normalizeMultilineText
     );
 
     if (!titleNode && !bodyNode) {
       return null;
     }
 
-    const titleIdSource =
-      cardNode.querySelector("a[href^='/r/']") ||
-      titleNode?.element ||
-      bodyNode?.element ||
-      cardNode;
-
     return {
       id:
-        cardNode.getAttribute("id") ||
-        cardNode.dataset.testid ||
-        titleIdSource.getAttribute?.("href") ||
-        (titleNode ? titleNode.text : "") ||
+        postNode.getAttribute("id") ||
+        postNode.getAttribute("post-id") ||
+        postNode.dataset.postId ||
+        getPostUrl(postNode) ||
         "",
+      url: getPostUrl(postNode),
       title: titleNode ? titleNode.text : "",
       body: bodyNode ? bodyNode.text : "",
       titleElement: titleNode ? titleNode.element : null,
@@ -182,11 +202,59 @@
     };
   }
 
-  function extractExploreNode(node, runtime) {
-    if (isTopicSectionNode(node)) {
-      return extractExploreTopic(node, runtime);
+  function extractComment(commentNode, runtime) {
+    const bodyNode = runtime.utils.getFirstText(
+      commentNode,
+      COMMENT_BODY_SELECTORS,
+      runtime.utils.normalizeMultilineText
+    );
+
+    if (!bodyNode) {
+      return null;
     }
-    return extractExploreCard(node, runtime);
+
+    return {
+      id:
+        commentNode.getAttribute("thingid") ||
+        commentNode.getAttribute("id") ||
+        getCommentUrl(commentNode) ||
+        "",
+      url: getCommentUrl(commentNode),
+      title: "",
+      body: bodyNode.text,
+      titleElement: null,
+      bodyElement: bodyNode.element,
+    };
+  }
+
+  function extractPostDetailNode(node, runtime) {
+    if (!(node instanceof HTMLElement)) {
+      return null;
+    }
+
+    if (node.matches("shreddit-comment, [data-testid='comment'], [thingid^='t1_']")) {
+      return extractComment(node, runtime);
+    }
+
+    return extractPost(node, runtime);
+  }
+
+  function getInsertAnchor(slot, sourceElement) {
+    if (!sourceElement) {
+      return null;
+    }
+
+    if (slot === "title") {
+      return (
+        sourceElement.closest("h1") ||
+        sourceElement.closest("a[id^='post-title-']") ||
+        sourceElement.closest("a[data-testid='post-title']") ||
+        sourceElement.closest("a[href*='/comments/']") ||
+        sourceElement
+      );
+    }
+
+    return sourceElement;
   }
 
   function getMetaText(slotLabel, runtime, providerId) {
@@ -235,11 +303,16 @@
     }
 
     function ensureSection(context, slot, sourceElement) {
-      if (!sourceElement || !sourceElement.parentElement) {
+      if (!sourceElement) {
         if (context.sections[slot]) {
           runtime.ui.removeSection(context.sections[slot]);
         }
         context.sections[slot] = null;
+        return null;
+      }
+
+      const anchor = getInsertAnchor(slot, sourceElement);
+      if (!anchor || !anchor.parentElement) {
         return null;
       }
 
@@ -250,7 +323,7 @@
         context.sections[slot] = section;
       }
 
-      runtime.ui.attachSectionAfter(section, sourceElement);
+      runtime.ui.attachSectionAfter(section, anchor);
       runtime.ui.setSectionMeta(section, getMetaText(slotLabel, runtime));
       return section;
     }
@@ -269,12 +342,13 @@
         return;
       }
 
-      const extracted = extractExploreNode(context.node, runtime);
+      const extracted = extractPostDetailNode(context.node, runtime);
       if (!extracted) {
         return;
       }
 
       context.extracted = extracted;
+
       const titleSection = ensureSection(context, "title", extracted.titleElement);
       const bodySection = ensureSection(context, "body", extracted.bodyElement);
       const signature = getContextTranslationSignature(context);
@@ -291,10 +365,16 @@
       context.pendingSignature = signature;
       let hadFailure = false;
 
+      if (extracted.title && titleSection) {
+        runtime.ui.setSectionLoading(titleSection, getMetaText("Title", runtime));
+      }
+      if (extracted.body && bodySection) {
+        runtime.ui.setSectionLoading(bodySection, getMetaText("Body", runtime));
+      }
+
       const jobs = [];
 
       if (extracted.title && titleSection) {
-        runtime.ui.setSectionLoading(titleSection, getMetaText("Title", runtime));
         jobs.push(
           runtime
             .translateText(extracted.title)
@@ -302,6 +382,7 @@
               if (context.runId !== runId) {
                 return;
               }
+
               runtime.ui.setSectionSuccess(
                 titleSection,
                 getMetaText("Title", runtime, result.providerId),
@@ -322,7 +403,6 @@
       }
 
       if (extracted.body && bodySection) {
-        runtime.ui.setSectionLoading(bodySection, getMetaText("Body", runtime));
         jobs.push(
           runtime
             .translateText(extracted.body)
@@ -330,6 +410,7 @@
               if (context.runId !== runId) {
                 return;
               }
+
               runtime.ui.setSectionSuccess(
                 bodySection,
                 getMetaText("Body", runtime, result.providerId),
@@ -353,6 +434,7 @@
         if (context.runId !== runId) {
           return;
         }
+
         context.pendingSignature = "";
         if (hadFailure) {
           context.failedSignature = signature;
@@ -390,9 +472,9 @@
     function scanNodes() {
       cleanupDetachedContexts();
 
-      const nodes = getExploreNodes(document, runtime);
+      const nodes = getPostDetailNodes(document, runtime);
       for (const node of nodes) {
-        const extracted = extractExploreNode(node, runtime);
+        const extracted = extractPostDetailNode(node, runtime);
         if (!extracted || (!extracted.title && !extracted.body)) {
           continue;
         }
@@ -413,15 +495,16 @@
       if (scanTimer) {
         clearTimeout(scanTimer);
       }
-      scanTimer = setTimeout(scanNodes, 160);
+
+      scanTimer = setTimeout(scanNodes, 120);
     }
 
     function mount() {
       runtime.ui.ensureSettingsUi({
         title: "Modular Web Translator",
-        moduleName: "Reddit Explore",
+        moduleName: "Reddit Post Detail",
         description:
-          "Translates Reddit Explore topic headers, community cards, and recommendation descriptions.",
+          "Supports Reddit post pages, including post titles, post bodies, and comment threads.",
       });
 
       scanNodes();
@@ -461,10 +544,10 @@
   }
 
   globalThis.ModularWebTranslator.registerSiteModule({
-    id: "reddit-explore",
-    name: "Reddit Explore",
+    id: "reddit-post-detail",
+    name: "Reddit Post Detail",
     mount(runtime) {
-      if (!document.body || !isRedditExplorePage(window.location)) {
+      if (!document.body || !isRedditPostDetailPage(window.location)) {
         return;
       }
 

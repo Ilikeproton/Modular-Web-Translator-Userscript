@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "cacheTtlMinutes": 30,
   "moduleCacheTtlMinutes": 30,
   "modules": [
@@ -51,7 +51,7 @@
     {
       "id": "reddit-explore",
       "name": "Reddit Explore",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/modules/reddit-explore.module.js",
       "minRuntimeVersion": "1.1.0",
       "matchRules": [
@@ -59,6 +59,20 @@
           "protocol": "https",
           "hostname": "www.reddit.com",
           "pathnameStartsWith": "/explore"
+        }
+      ]
+    },
+    {
+      "id": "reddit-post-detail",
+      "name": "Reddit Post Detail",
+      "version": "1.0.0",
+      "scriptUrl": "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main/modules/reddit-post-detail.module.js",
+      "minRuntimeVersion": "1.1.0",
+      "matchRules": [
+        {
+          "protocol": "https",
+          "hostname": "www.reddit.com",
+          "pathnameRegex": "^/(?:r/[^/]+/)?comments/[^/]+(?:/[^/]+){0,2}/?$"
         }
       ]
     }

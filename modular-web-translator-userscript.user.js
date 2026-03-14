@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Modular Web Translator Userscript
 // @namespace    https://github.com/Ilikeproton/Modular-Web-Translator-Userscript
-// @version      1.8.6
+// @version      1.9.0
 // @description  Extensible web page translator userscript with remote site and provider modules.
 // @match        *://*/*
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.8.6";
+  const SCRIPT_VERSION = "1.8.7";
   const MODULE_REGISTRY_NAME = "ModularWebTranslator";
   const REMOTE_BASE_URL =
     "https://raw.githubusercontent.com/Ilikeproton/Modular-Web-Translator-Userscript/main";
@@ -325,7 +325,7 @@
   function getDefaultProviderManifest() {
     return normalizeProviderManifest({
       schemaVersion: 1,
-      version: "1.8.6",
+      version: "1.8.7",
       cacheTtlMinutes: 30,
       moduleCacheTtlMinutes: 30,
       providers: [
@@ -2596,6 +2596,43 @@
       "div.md",
       "[data-testid='post-content']",
     ];
+    const POST_DETAIL_POST_SELECTORS = [
+      "shreddit-post[view-context='CommentsPage']",
+      "shreddit-post[permalink*='/comments/'][post-title]",
+      "shreddit-post[content-href*='/comments/'][post-title]",
+    ];
+    const POST_DETAIL_TITLE_SELECTORS = [
+      "h1",
+      "a[id^='post-title-']",
+      "[slot='title']",
+      "a[data-testid='post-title']",
+      "h2",
+      "h3",
+      "faceplate-screen-reader-content",
+    ];
+    const POST_DETAIL_BODY_SELECTORS = [
+      "shreddit-post-text-body",
+      "[slot='text-body']",
+      "[data-post-click-location='text-body']",
+      "div[data-click-id='text']",
+      "div.md",
+      "[data-testid='post-content']",
+    ];
+    const COMMENT_NODE_SELECTORS = [
+      "shreddit-comment[thingid]",
+      "shreddit-comment",
+      "[data-testid='comment']",
+      "[thingid^='t1_']",
+    ];
+    const COMMENT_BODY_SELECTORS = [
+      ":scope > [slot='comment']",
+      ":scope > [id$='-comment-rtjson-content']",
+      ":scope > div.md[slot='comment']",
+      ":scope > div.md",
+      "[slot='comment']",
+      "[id$='-comment-rtjson-content']",
+      "div.md[slot='comment']",
+    ];
     const EXCLUDED_FEED_PREFIXES = [
       "/explore",
       "/settings",
@@ -2609,6 +2646,10 @@
       "/submit",
       "/chat",
     ];
+    const DIRECT_EXPLORE_SELECTORS = [
+      "in-feed-community-recommendations",
+      "community-recommendation",
+    ].join(", ");
     const EXPLORE_CONTAINER_SELECTOR = [
       "[data-testid='community-card']",
       "faceplate-card",
@@ -2619,16 +2660,19 @@
       "div[class*='card']",
       "div[class*='Card']",
     ].join(", ");
+    const EXPLORE_TOPIC_TITLE_SELECTORS = ["h3[slot='title']", "[slot='title']", "h2", "h3"];
     const EXPLORE_TITLE_SELECTORS = [
-      "a[href^='/r/']",
-      "h2",
+      "h4",
       "h3",
       "[data-testid='card-title']",
+      "[slot='title']",
+      "a[href^='/r/']",
     ];
     const EXPLORE_BODY_SELECTORS = [
-      "p",
+      "p.line-clamp-2",
       "[data-testid='description']",
       "[slot='description']",
+      "p",
       "span",
     ];
 
@@ -2957,6 +3001,165 @@
       return sourceElement;
     }
 
+    function normalizePathname(pathname) {
+      const normalized = String(pathname || "/").trim() || "/";
+      if (normalized === "/") {
+        return normalized;
+      }
+      return normalized.replace(/\/+$/, "");
+    }
+
+    function stripCommentLeaf(pathname) {
+      return normalizePathname(pathname).replace(/\/comment\/[^/]+$/i, "");
+    }
+
+    function isSameCommentThread(candidatePathname, currentPathname) {
+      return stripCommentLeaf(candidatePathname) === stripCommentLeaf(currentPathname);
+    }
+
+    function isRedditPostDetailPage(url) {
+      if (url.hostname !== "www.reddit.com") {
+        return false;
+      }
+      return /^\/(?:r\/[^/]+\/)?comments\/[^/]+(?:\/[^/]+){0,2}\/?$/.test(url.pathname || "/");
+    }
+
+    function resolveUrl(value) {
+      if (!value) {
+        return "";
+      }
+      try {
+        return new URL(value, location.origin).toString();
+      } catch (error) {
+        return String(value);
+      }
+    }
+
+    function getPostDetailUrl(postNode) {
+      return (
+        resolveUrl(postNode.getAttribute("permalink")) ||
+        resolveUrl(postNode.getAttribute("content-href")) ||
+        resolveUrl(postNode.querySelector("a[href*='/comments/']")?.getAttribute("href")) ||
+        ""
+      );
+    }
+
+    function getCommentDetailUrl(commentNode) {
+      return (
+        resolveUrl(commentNode.getAttribute("permalink")) ||
+        resolveUrl(commentNode.querySelector("a[href*='/comment/']")?.getAttribute("href")) ||
+        ""
+      );
+    }
+
+    function scorePostDetailNode(postNode) {
+      const currentPath = normalizePathname(location.pathname);
+      const postUrl = getPostDetailUrl(postNode);
+      let score = 0;
+
+      if (postNode.hasAttribute("data-expected-lcp")) {
+        score += 4;
+      }
+      if (postNode.getAttribute("view-context") === "CommentsPage") {
+        score += 3;
+      }
+
+      if (postUrl) {
+        const postPath = normalizePathname(new URL(postUrl, location.origin).pathname);
+        if (isSameCommentThread(postPath, currentPath)) {
+          score += 8;
+        }
+      }
+
+      return score;
+    }
+
+    function getPostDetailNodes(root) {
+      const postNodes = uniqueNodes(
+        POST_DETAIL_POST_SELECTORS.flatMap((selector) => Array.from(root.querySelectorAll(selector)))
+      );
+      const primaryPostNodes =
+        postNodes.length === 0
+          ? []
+          : postNodes
+              .slice()
+              .sort((left, right) => scorePostDetailNode(right) - scorePostDetailNode(left))
+              .slice(0, 1);
+
+      const commentNodes = uniqueNodes(
+        COMMENT_NODE_SELECTORS.flatMap((selector) => Array.from(root.querySelectorAll(selector)))
+      ).filter((node) =>
+        Boolean(getFirstText(node, COMMENT_BODY_SELECTORS, normalizeMultilineText))
+      );
+
+      return uniqueNodes([...primaryPostNodes, ...commentNodes]);
+    }
+
+    function extractPostDetailPost(postNode) {
+      const titleFromAttribute = normalizeInlineText(postNode.getAttribute("post-title"));
+      const titleNode =
+        titleFromAttribute
+          ? {
+              text: titleFromAttribute,
+              element:
+                postNode.querySelector("h1") ||
+                postNode.querySelector("a[id^='post-title-']") ||
+                postNode.querySelector("[slot='title']") ||
+                postNode.querySelector("a[data-testid='post-title']") ||
+                postNode,
+            }
+          : getFirstText(postNode, POST_DETAIL_TITLE_SELECTORS, normalizeInlineText);
+      const bodyNode = getFirstText(postNode, POST_DETAIL_BODY_SELECTORS, normalizeMultilineText);
+
+      if (!titleNode && !bodyNode) {
+        return null;
+      }
+
+      return {
+        title: titleNode ? titleNode.text : "",
+        body: bodyNode ? bodyNode.text : "",
+        titleElement: titleNode ? titleNode.element : null,
+        bodyElement: bodyNode ? bodyNode.element : null,
+      };
+    }
+
+    function extractPostDetailComment(commentNode) {
+      const bodyNode = getFirstText(commentNode, COMMENT_BODY_SELECTORS, normalizeMultilineText);
+      if (!bodyNode) {
+        return null;
+      }
+
+      return {
+        title: "",
+        body: bodyNode.text,
+        titleElement: null,
+        bodyElement: bodyNode.element,
+      };
+    }
+
+    function extractPostDetailItem(node) {
+      if (node.matches("shreddit-comment, [data-testid='comment'], [thingid^='t1_']")) {
+        return extractPostDetailComment(node);
+      }
+      return extractPostDetailPost(node);
+    }
+
+    function getPostDetailAnchor(slot, sourceElement) {
+      if (!sourceElement) {
+        return null;
+      }
+      if (slot === "title") {
+        return (
+          sourceElement.closest("h1") ||
+          sourceElement.closest("a[id^='post-title-']") ||
+          sourceElement.closest("a[data-testid='post-title']") ||
+          sourceElement.closest("a[href*='/comments/']") ||
+          sourceElement
+        );
+      }
+      return sourceElement;
+    }
+
     const redditFeedFallback = {
       id: "reddit-feed",
       name: "Reddit Feed",
@@ -2979,11 +3182,59 @@
       },
     };
 
+    const redditPostDetailFallback = {
+      id: "reddit-post-detail",
+      name: "Reddit Post Detail",
+      mount(runtime) {
+        if (!document.body || !isRedditPostDetailPage(window.location)) {
+          return;
+        }
+        return createCollectionController(runtime, {
+          scanDelay: 120,
+          getNodes: getPostDetailNodes,
+          extract: extractPostDetailItem,
+          getAnchor: getPostDetailAnchor,
+          uiDetails: {
+            title: "Modular Web Translator",
+            moduleName: "Reddit Post Detail",
+            description:
+              "Built-in Reddit post-detail fallback is active because remote module execution was blocked by the current page CSP. Post titles, post bodies, and comments remain translatable.",
+          },
+        });
+      },
+    };
+
     function isRedditExplorePage(url) {
       return url.hostname === "www.reddit.com" && url.pathname.startsWith("/explore");
     }
 
+    function isExploreTopicNode(node) {
+      return node.matches("in-feed-community-recommendations");
+    }
+
+    function isExploreNodeCandidate(node) {
+      if (!(node instanceof HTMLElement)) {
+        return false;
+      }
+      if (node.closest("header, nav")) {
+        return false;
+      }
+      if (node.querySelector("shreddit-post, [data-testid='post-container']")) {
+        return false;
+      }
+      if (isExploreTopicNode(node)) {
+        return Boolean(node.querySelector("h3[slot='title'], [slot='title'], h2, h3"));
+      }
+      return Boolean(node.querySelector("a[href^='/r/'], h4, h3, [data-testid='card-title']"));
+    }
+
     function getExploreCardNodes(root) {
+      const directNodes = uniqueNodes(Array.from(root.querySelectorAll(DIRECT_EXPLORE_SELECTORS)))
+        .filter(isExploreNodeCandidate);
+      if (directNodes.length > 0) {
+        return directNodes;
+      }
+
       const links = Array.from(root.querySelectorAll("a[href^='/r/']"));
       const cards = links
         .map(
@@ -2993,26 +3244,18 @@
             link.parentElement
         )
         .filter(Boolean);
-      return uniqueNodes(cards).filter((node) => {
-        if (!(node instanceof HTMLElement)) {
-          return false;
-        }
-        if (node.closest("header, nav")) {
-          return false;
-        }
-        if (node.querySelector("shreddit-post, [data-testid='post-container']")) {
-          return false;
-        }
-        return Boolean(node.querySelector("a[href^='/r/']"));
-      });
+      return uniqueNodes(cards).filter(isExploreNodeCandidate);
     }
 
-    function pickFirstMeaningful(root, selectors, normalizer, minLength) {
+    function pickFirstMeaningful(root, selectors, normalizer, minLength, predicate) {
       for (const selector of selectors) {
         const candidates = root.querySelectorAll(selector);
         for (const element of candidates) {
           const text = normalizer(element.textContent);
           if (text && text.length >= minLength) {
+            if (predicate && !predicate(text, element)) {
+              continue;
+            }
             return {
               text,
               element,
@@ -3023,7 +3266,38 @@
       return null;
     }
 
+    function isMeaningfulExploreBody(text, element) {
+      if (element.querySelector("faceplate-number")) {
+        return false;
+      }
+
+      const normalized = text.toLowerCase();
+      return (
+        !normalized.includes("weekly visitors") &&
+        !normalized.includes("monthly visitors") &&
+        !normalized.includes("members online")
+      );
+    }
+
     function extractExploreCard(cardNode) {
+      if (isExploreTopicNode(cardNode)) {
+        const topicTitleNode = pickFirstMeaningful(
+          cardNode,
+          EXPLORE_TOPIC_TITLE_SELECTORS,
+          normalizeInlineText,
+          2
+        );
+        if (!topicTitleNode) {
+          return null;
+        }
+        return {
+          title: topicTitleNode.text,
+          body: "",
+          titleElement: topicTitleNode.element,
+          bodyElement: null,
+        };
+      }
+
       const titleNode = pickFirstMeaningful(
         cardNode,
         EXPLORE_TITLE_SELECTORS,
@@ -3034,7 +3308,8 @@
         cardNode,
         EXPLORE_BODY_SELECTORS,
         normalizeInlineText,
-        20
+        20,
+        isMeaningfulExploreBody
       );
       if (!titleNode && !bodyNode) {
         return null;
@@ -3065,7 +3340,7 @@
             title: "Modular Web Translator",
             moduleName: "Reddit Explore",
             description:
-              "Built-in Reddit Explore fallback is active because remote module execution was blocked by the current page CSP.",
+              "Built-in Reddit Explore fallback is active because remote module execution was blocked by the current page CSP. Topic headers, community cards, and descriptions remain translatable.",
           },
         });
       },
@@ -3073,6 +3348,7 @@
 
     builtInSiteModules.set("reddit-feed", redditFeedFallback);
     builtInSiteModules.set("reddit-new", redditFeedFallback);
+    builtInSiteModules.set("reddit-post-detail", redditPostDetailFallback);
     builtInSiteModules.set("reddit-explore", redditExploreFallback);
   }
 
